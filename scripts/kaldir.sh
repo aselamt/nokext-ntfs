@@ -5,9 +5,8 @@
 #           sudo kaldir.sh --macfuse  (ek olarak macFUSE'u kendi resmi kaldırıcısıyla kaldırır)
 . "$(dirname "$0")/ortak.sh"
 root_gerek
-bagliysa_dur
+bakim_baslat   # servis durur; bağlı / bağlanmakta olan disk varsa servis geri açılır ve hiçbir şey silinmez
 U=$(konsol_uid)
-launchctl bootout system/local.ntfsotomatik 2>/dev/null || true
 launchctl bootout gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
 rm -f "$DAEMON_PLIST" "$AGENT_PLIST"
 rm -rf /Library/Logs/NTFSOtomatik

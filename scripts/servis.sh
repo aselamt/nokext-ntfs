@@ -12,8 +12,8 @@ case "${1:-}" in
     launchctl kickstart gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
     echo "Servis açıldı. Takılan NTFS diskler yazılabilir bağlanacak." ;;
   kapat)
-    bagliysa_dur
-    launchctl bootout system/local.ntfsotomatik 2>/dev/null || true
+    bakim_baslat       # önce servis durur, sonra denetlenir; bağlı disk varsa servis geri açılır
+    SERVIS_ACIKTI=0    # başarıyla kapatıldı: çıkışta yeniden başlatılmasın
     launchctl bootout gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
     echo "Servis kapatıldı. NTFS diskler macOS'un kendi salt-okunur desteğiyle açılır."
     echo "(Mac yeniden başlarsa servis, otomatik başlatma açıksa yeniden başlar; kalıcı kapatmak için kaldir.sh.)" ;;

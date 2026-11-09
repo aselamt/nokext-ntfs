@@ -9,7 +9,10 @@
  *    Yalnızca DiskArbitration olaylarına tepki verir (yoklama döngüsü yok).
  *  - Aygıt adı ^disk[0-9]+s[0-9]+$ olmalı; işlem öncesi DiskArbitration'dan yeniden doğrulanır:
  *    harici + NTFS değilse hiçbir şey yapılmaz (APFS, exFAT, FAT32, HFS+ ve dahili disklere dokunulmaz).
- *  - Diskler aygıt adına göre değil, kimliğe (birim UUID / ortam UUID / aygıt yolu+boyut) göre izlenir.
+ *  - Diskler kimlik (birim UUID / ortam UUID / aygıt yolu+boyut) VE o anki aygıt adıyla birlikte izlenir:
+ *    aynı UUID'yi taşıyan iki klon bölüm ayrı kayıt olur.
+ *  - Her kayıt takıldığı anda benzersiz bir oturum numarası (gen) alır. Gecikmeli DiskArbitration
+ *    sonuçları kayda bu numarayla ulaşır; disk çekilip yuva başka diske verildiyse sonuç yok sayılır.
  *  - ntfs-3g her zaman -o norecover ile; recover, remove_hiberfile, force KULLANILMAZ. ntfsfix yok.
  *  - Zorla ayırma yok: macOS'un salt-okunur bağlantısı yalnızca zorlamasız ayrılır, olmazsa dokunulmaz.
  *  - ntfs-3g root olarak çalışmaz: servis aygıtı açar, alt süreçte yetki konsol kullanıcısına düşürülür,
@@ -40,6 +43,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/param.h>
+#include <stdint.h>
 
 #define BASE        "/Library/NTFSOtomatik"
 #define NTFS3G      BASE "/current/bin/ntfs-3g"
@@ -176,22 +180,45 @@ typedef struct {
     int pull_notified;    /* 'çıkarılmadan çekildi' bildirimi verildi */
     char obuf[4096];      /* ntfs-3g çıktı satır tamponu */
     size_t oused;
+    unsigned gen;         /* takma oturumu numarası (0 = yok); yuva her ayrıldığında yenisi verilir */
 } disk_t;
 
 static disk_t g_disks[MAX_DISKS];
 static DASessionRef g_session;
+static unsigned g_gen;
 
-static disk_t *find_by_key(const char *key) {
-    for (int i = 0; i < MAX_DISKS; i++) if (g_disks[i].st != ST_FREE && !strcmp(g_disks[i].key, key)) return &g_disks[i];
+/* Etkin kayıt: kimlik + o anki aygıt adı. Klon diskler (aynı UUID, farklı diskXsY) ayrı kayıttır. */
+static disk_t *find_disk(const char *key, const char *bsd) {
+    for (int i = 0; i < MAX_DISKS; i++)
+        if (g_disks[i].st != ST_FREE && !strcmp(g_disks[i].key, key) && !strcmp(g_disks[i].bsd, bsd)) return &g_disks[i];
     return NULL;
 }
-static disk_t *alloc_disk(const char *key) {
+static void free_disk(disk_t *dk) {
+    memset(dk, 0, sizeof *dk); dk->st = ST_FREE; dk->pid = -1; dk->out_fd = -1;
+}
+static disk_t *alloc_disk(const char *key, const char *bsd) {
     for (int i = 0; i < MAX_DISKS; i++) if (g_disks[i].st == ST_FREE) {
-        memset(&g_disks[i], 0, sizeof(disk_t)); g_disks[i].out_fd = -1; g_disks[i].pid = -1;
+        free_disk(&g_disks[i]);
         snprintf(g_disks[i].key, sizeof g_disks[i].key, "%s", key);
+        snprintf(g_disks[i].bsd, sizeof g_disks[i].bsd, "%s", bsd);
+        if (++g_gen == 0) g_gen = 1;
+        g_disks[i].gen = g_gen;
         return &g_disks[i];
     }
     return NULL;
+}
+/* Gecikmeli geri çağrılara yuva işaretçisi değil, oturum numarası verilir. */
+static void *gen_ctx(const disk_t *dk) { return (void *)(uintptr_t)dk->gen; }
+static disk_t *find_by_gen(void *ctx) {
+    unsigned gen = (unsigned)(uintptr_t)ctx;
+    if (!gen) return NULL;
+    for (int i = 0; i < MAX_DISKS; i++) if (g_disks[i].st != ST_FREE && g_disks[i].gen == gen) return &g_disks[i];
+    return NULL;
+}
+/* Geri çağrının diski, kaydın diski mi? (aygıt adı aynı olmalı) */
+static int same_bsd(DADiskRef disk, const disk_t *dk) {
+    const char *b = disk ? DADiskGetBSDName(disk) : NULL;
+    return b && !strcmp(b, dk->bsd);
 }
 
 typedef struct {
@@ -262,7 +289,11 @@ static void handle_line(disk_t *dk, const char *line) {
 /* ---------- macOS'un kendi salt-okunur bağlaması (yedek yol) ---------- */
 
 static void native_mount_cb(DADiskRef disk, DADissenterRef dis, void *ctx) {
-    disk_t *dk = ctx;
+    disk_t *dk = find_by_gen(ctx);
+    if (!dk || dk->st != ST_NATIVE || !same_bsd(disk, dk)) {
+        logf_("eski bir salt-okunur bağlama sonucu yok sayıldı (%s)", disk && DADiskGetBSDName(disk) ? DADiskGetBSDName(disk) : "?");
+        return;
+    }
     if (dis && disk) {
         /* macOS kendi isteğiyle aynı anda bağlamış olabilir: gerçekten bağlı mı, ona bak */
         CFDictionaryRef d = DADiskCopyDescription(disk);
@@ -289,7 +320,7 @@ static void fallback_native(disk_t *dk) {
     if (!in.ok || strcmp(in.key, dk->key)) { CFRelease(disk); dk->st = ST_FAILED; logf_("[%s] yedek bağlama iptal: disk değişmiş", dk->name); return; }
     dk->st = ST_NATIVE; /* onay geri çağrısı bu duruma izin verir */
     logf_("[%s] macOS salt-okunur bağlama deneniyor (%s)", dk->name, dk->bsd);
-    DADiskMount(disk, NULL, kDADiskMountOptionDefault, native_mount_cb, dk);
+    DADiskMount(disk, NULL, kDADiskMountOptionDefault, native_mount_cb, gen_ctx(dk));
     CFRelease(disk);
 }
 
@@ -325,7 +356,7 @@ static void child_exited(disk_t *dk) {
                         dk->name, dk->last_err[0] ? dk->last_err : "bilinmeyen sebep");
         }
     }
-    if (dk->gone) { memset(dk, 0, sizeof *dk); dk->st = ST_FREE; dk->pid = -1; dk->out_fd = -1; }
+    if (dk->gone) free_disk(dk);
 }
 
 /* ---------- yazılabilir bağlama ---------- */
@@ -333,14 +364,19 @@ static void child_exited(disk_t *dk) {
 static void consider(DADiskRef disk);
 
 static void unmount_cb(DADiskRef disk, DADissenterRef dis, void *ctx) {
-    disk_t *dk = ctx;
+    disk_t *dk = find_by_gen(ctx);
+    if (!dk || dk->st != ST_MOUNTING || dk->pid > 0 || !same_bsd(disk, dk)) {
+        /* disk bu arada çekildi ve yuva boşaldı / başka diske verildi: sonuç o diske ait değil */
+        logf_("eski bir ayırma sonucu yok sayıldı (%s)", disk && DADiskGetBSDName(disk) ? DADiskGetBSDName(disk) : "?");
+        return;
+    }
     if (dis) {
         dk->st = ST_NATIVE;
         notify_user("“%s” macOS tarafından salt-okunur açık ve zorlamadan ayrılamadı (kullanımda olabilir). Dokunulmadı; salt-okunur kaldı.", dk->name);
         return;
     }
     logf_("[%s] macOS bağlantısı ayrıldı", dk->name);
-    dk->st = ST_FREE; dk->key[0] = 0;
+    free_disk(dk);
     CFRetain(disk);
     dispatch_async(dispatch_get_main_queue(), ^{ consider(disk); CFRelease(disk); });
 }
@@ -359,7 +395,7 @@ static void start_mount(DADiskRef disk, disk_t *dk, const info_t *in) {
     if (in->mounted) {
         logf_("[%s] macOS bağlantısı var, zorlamadan ayırma isteniyor", dk->name);
         dk->st = ST_MOUNTING; /* ayrılırken gelen olaylar yok sayılsın */
-        DADiskUnmount(disk, kDADiskUnmountOptionDefault, unmount_cb, dk);
+        DADiskUnmount(disk, kDADiskUnmountOptionDefault, unmount_cb, gen_ctx(dk));
         return;
     }
 
@@ -443,9 +479,10 @@ static void start_mount(DADiskRef disk, disk_t *dk, const info_t *in) {
     dispatch_resume(dk->proc);
 
     /* bağlandı mı? sınırlı süre bekle (yalnızca bu bağlama için, yoklama döngüsü değil) */
+    unsigned gen = dk->gen;
     for (int i = 1; i <= MOUNT_WAIT; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)i * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            if (dk->st != ST_MOUNTING || dk->pid != pid) return;
+            if (dk->gen != gen || dk->st != ST_MOUNTING || dk->pid != pid) return;
             if (is_mountpoint(dk->mnt)) {
                 dk->st = ST_MOUNTED;
                 if (dk->saw_fallback_ro)
@@ -466,15 +503,10 @@ static void start_mount(DADiskRef disk, disk_t *dk, const info_t *in) {
 static void consider(DADiskRef disk) {
     info_t in; disk_info(disk, &in);
     if (!in.ok) return;
-    disk_t *dk = find_by_key(in.key);
-    if (dk) {
-        /* tekrarlanan olaylar: yalnızca durum serbestse işlem yap */
-        if (dk->st == ST_EJECTED || dk->st == ST_MOUNTING || dk->st == ST_MOUNTED || dk->st == ST_NATIVE || dk->st == ST_FAILED) return;
-    } else {
-        dk = alloc_disk(in.key);
-        if (!dk) { logf_("çok fazla disk; %s yok sayıldı", in.bsd); return; }
-    }
-    snprintf(dk->bsd, sizeof dk->bsd, "%s", in.bsd);
+    /* tekrarlanan olaylar: bu bölüm için kayıt varsa (hangi durumda olursa olsun) yeni işlem başlatılmaz */
+    if (find_disk(in.key, in.bsd)) return;
+    disk_t *dk = alloc_disk(in.key, in.bsd);
+    if (!dk) { logf_("çok fazla disk; %s yok sayıldı", in.bsd); return; }
     snprintf(dk->name, sizeof dk->name, "%s", in.name);
     logf_("[%s] harici NTFS bölümü: %s (kimlik %s)%s", dk->name, in.bsd, in.key, in.mounted ? ", macOS bağlamış" : "");
     start_mount(disk, dk, &in);
@@ -484,11 +516,11 @@ static DADissenterRef mount_approval(DADiskRef disk, void *ctx) {
     (void)ctx;
     info_t in; disk_info(disk, &in);
     if (!in.ok) return NULL; /* NTFS değil / dahili: macOS normal davranır */
-    disk_t *dk = find_by_key(in.key);
+    disk_t *dk = find_disk(in.key, in.bsd);
     if (dk && dk->st == ST_NATIVE) return NULL; /* yedek salt-okunur bağlamaya izin */
     if (dk && dk->st == ST_FAILED) return NULL;
     logf_("[%s] macOS'un bağlama isteği reddedildi (%s)", in.name, in.bsd);
-    if (!dk || dk->st == ST_FREE) {
+    if (!dk) {
         /* ilk kez görülüyor: biz bağlayacağız */
         CFRetain(disk);
         dispatch_async(dispatch_get_main_queue(), ^{ consider(disk); CFRelease(disk); });
@@ -537,7 +569,7 @@ static void disk_disappeared(DADiskRef disk, void *ctx) {
             dk->key[0] = 0;          /* yeniden takılan disk bu yuvayla eşleşmesin */
             if (!dk->last_err[0]) snprintf(dk->last_err, sizeof dk->last_err, "disk çıkarıldı");
         } else {
-            memset(dk, 0, sizeof *dk); dk->st = ST_FREE; dk->pid = -1; dk->out_fd = -1;
+            free_disk(dk);   /* bekleyen DiskArbitration sonuçları artık bu yuvaya ulaşamaz (gen sıfırlandı) */
         }
     }
 }

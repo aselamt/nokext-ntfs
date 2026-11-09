@@ -48,7 +48,15 @@ Darwin'de ntfs-3g'nin `nfconv` özelliği açıktır (adlar macOS'a ayrışık/N
 
 - Root servis argüman, soket ya da yapılandırma dosyası kabul etmez; yalnızca DiskArbitration olaylarına tepki verir.
 - Aygıt adı `^disk[0-9]+s[0-9]+$` olmalı; işlem anında DiskArbitration'dan harici + `VolumeKind=ntfs` yeniden doğrulanır.
-- Diskler kimliğe göre izlenir: birim UUID → ortam (bölüm) UUID → aygıt yolu + boyut. (Aynı `diskXsY` adı farklı disklere verilebiliyor.)
+- Diskler kimlik (birim UUID → ortam (bölüm) UUID → aygıt yolu + boyut) **ve** o anki `diskXsY` adıyla birlikte izlenir.
+  Aynı `diskXsY` adı farklı disklere verilebiliyor; aynı UUID'yi taşıyan iki klon bölüm de ayrı kayıt olur.
+- Her kayıt takıldığında benzersiz bir oturum numarası alır. Gecikmeli DiskArbitration sonuçları (macOS bağlantısını
+  ayırma, salt-okunur yedek bağlama) kayda yuva işaretçisiyle değil bu numarayla ulaşır: disk bu arada çekilip yuva başka
+  diske verildiyse eski sonuç yok sayılır (aksi halde yeni disk ntfs-3g ile bağlıyken macOS'a da bırakılabiliyordu).
+- Bakım betikleri (`kur.sh`, `guncelle.sh`, `geri-al.sh`, `kaldir.sh`, `servis.sh kapat`) önce servisi durdurur, **sonra**
+  bağlı / bağlanmakta olan ntfs-3g olup olmadığına bakar; böylece kontrol ile dosya değişikliği arasında yeni bağlama başlayamaz.
+  Betik yarıda kalırsa servis eski haline getirilir. `current`/`onceki` birlikte değişir; ikincisi olmazsa birincisi geri çevrilir.
+- macFUSE kurucusu geçici dosyalarını yalnızca root'un mktemp ile oluşturduğu klasörde tutar (`/tmp`'de sabit ad yok).
 - Bağlama noktası adı ve `volname` temizlenir (`/ : , = \ "`, denetim karakterleri, `.`/`..`; virgül ntfs-3g seçeneği enjekte edemesin diye).
 - Root ile kullanıcı arasında tek yönlü iletişim: root, `root:wheel 0644` bir dosyaya satır ekler; kullanıcı ajanı yalnızca okur
   ve metni osascript'e kod olarak değil `argv` olarak verir.
@@ -72,7 +80,11 @@ Darwin'de ntfs-3g'nin `nfconv` özelliği açıktır (adlar macOS'a ayrışık/N
 | Gerçek güncelleme ve tek komutla geri alma | Çalışıyor |
 | Yeniden başlatma sonrası otomatik başlama | Çalışıyor |
 
-Denenemeyenler: aynı adlı iki disk, hazırda bekletmedeki Windows birimi, aynı anda takılı exFAT/APFS diskler.
+Olay sırası regresyon testleri (gerçek disk gerekmez): `sh test/olay/calistir.sh` servisi sahte DiskArbitration ile
+derleyip çıkar-tak, Finder ⏏, gecikmiş ayırma/bağlama sonucu ve klon UUID senaryolarını sınar.
+`sh test/surum_testi.sh` geri almanın yarıda kalma durumunu sınar.
+
+Denenemeyenler (gerçek diskle): aynı adlı iki disk, hazırda bekletmedeki Windows birimi, aynı anda takılı exFAT/APFS diskler.
 
 Not: Geliştirme sırasında arızalı bir USB bellek, donanım düzeyinde yazma hataları verdi (Windows'ta da
 bozuldu). Bu tür hatalar ntfs-3g'den bağımsızdır; kernel günlüğündeki `IOSCSI… I/O error` satırlarıyla ayırt edilebilir.

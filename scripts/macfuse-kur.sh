@@ -22,6 +22,9 @@ if [ -n "$V" ] && [ -d /Library/Filesystems/macfuse.fs ]; then
   exit 0
 fi
 
+# Tüm geçici dosyalar root'un mktemp -d ile oluşturduğu, adı tahmin edilemeyen ve önceden var
+# olamayan bir klasörde durur. /private/tmp'de sabit adlı dosya KULLANILMAZ: başka bir yerel kullanıcı
+# o ada önceden sembolik bağ koyarsa root'un cp'si bağın hedefinin üzerine yazar.
 T=$(mktemp -d /private/tmp/ntfsotomatik-macfuse.XXXXXX)
 temizle() { hdiutil detach -quiet "$T/mnt" 2>/dev/null || true; rm -rf "$T"; }
 trap temizle EXIT INT TERM
@@ -59,15 +62,16 @@ else
   echo "Komut satırından kurulamadı; macOS Yükleyici penceresi açılıyor."
   echo "Pencerede: Devam > Kabul Et > 'Özelleştir' > 'macFUSE Preference Pane' işaretini kaldır > Yükle."
   echo "Sistem uzantısı (kext) izni isteyen bir uyarı çıkarsa İZİN VERMEYİN; FSKit yöntemi bunu gerektirmez."
-  KALICI=/private/tmp/macfuse-$MACFUSE_VER.pkg
-  cp "$PKG" "$KALICI"; chmod 644 "$KALICI"
+  # Yükleyici kullanıcı olarak çalışır ve paketi okuyabilmeli. Paket kopyalanmaz; imzası doğrulanmış
+  # dosya yerinde kalır. Klasör root'a ait ve 0755 (kullanıcı okur, içine yazamaz, adını değiştiremez:
+  # /private/tmp yapışkan bitli), paket 0444.
+  chown root:wheel "$T" "$PKG"; chmod 755 "$T"; chmod 444 "$PKG"
   U=$(stat -f %u /dev/console)
-  launchctl asuser "$U" /usr/bin/open -a Installer "$KALICI"
+  launchctl asuser "$U" /usr/bin/open -a Installer "$PKG"
   printf "Kurulum bekleniyor"
   i=0
   while [ $i -lt 120 ] && [ -z "$(kurulu_surum)" ]; do sleep 5; printf "."; i=$((i+1)); done
   echo
-  rm -f "$KALICI"
   [ -n "$(kurulu_surum)" ] || { echo "macFUSE kurulmadı (10 dk bekendi). Kurulumu tamamlayıp betiği yeniden çalıştırın."; exit 1; }
   echo "macFUSE $(kurulu_surum) kuruldu."
 fi
