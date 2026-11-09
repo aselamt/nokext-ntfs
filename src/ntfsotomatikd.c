@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * ntfsotomatikd — NTFSOtomatik root servisi
+ * ntfsotomatikd — NoKext NTFS root servisi
  *
  * Görev: Harici NTFS bölümleri takıldığında onları ntfs-3g ile yazılabilir bağlamak.
  *
@@ -493,7 +493,7 @@ static DADissenterRef mount_approval(DADiskRef disk, void *ctx) {
         CFRetain(disk);
         dispatch_async(dispatch_get_main_queue(), ^{ consider(disk); CFRelease(disk); });
     }
-    return DADissenterCreate(kCFAllocatorDefault, kDAReturnBusy, CFSTR("NTFSOtomatik"));
+    return DADissenterCreate(kCFAllocatorDefault, kDAReturnBusy, CFSTR("NoKext NTFS"));
 }
 
 static void disk_appeared(DADiskRef disk, void *ctx) { (void)ctx; consider(disk); }

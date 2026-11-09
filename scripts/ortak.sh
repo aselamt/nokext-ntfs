@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik ortak yardımcılar (diğer betikler bunu yükler)
+# NoKext NTFS ortak yardımcılar (diğer betikler bunu yükler)
 N=/Library/NTFSOtomatik
 LOG=/Library/Logs/NTFSOtomatik/ntfsotomatik.log
 DAEMON_PLIST=/Library/LaunchDaemons/local.ntfsotomatik.plist

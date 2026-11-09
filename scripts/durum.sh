@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik durumu (yetki gerekmez, hiçbir şeyi değiştirmez)
+# NoKext NTFS durumu (yetki gerekmez, hiçbir şeyi değiştirmez)
 . "$(dirname "$0")/ortak.sh"
 echo "== Servis"
 launchctl print system/local.ntfsotomatik 2>/dev/null | grep -E '^\s*(state|pid) =' | head -2 || echo "  yüklü değil"

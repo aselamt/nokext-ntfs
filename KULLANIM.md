@@ -1,4 +1,4 @@
-# NTFSOtomatik — Kullanım Kılavuzu
+# NoKext NTFS — Kullanım Kılavuzu
 
 ## 1. Bu ne yapar?
 

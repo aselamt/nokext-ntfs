@@ -1,4 +1,4 @@
-# NTFSOtomatik
+# NoKext NTFS
 
 macOS 26/27'de harici NTFS (Windows) diskleri **kendiliğinden ve yazılabilir** bağlar.
 Açık kaynak **ntfs-3g** sürücüsünü ve **macFUSE FSKit** yöntemini kullanır: çekirdek uzantısı (kext),
@@ -19,7 +19,7 @@ Gerekenler: macOS 26 veya 27, Xcode Command Line Tools (`xcode-select --install`
 onayını doğrular ve yalnızca çekirdek (Core) bileşenini kurar.
 
 ```sh
-git clone https://github.com/aselamt/ntfsotomatik.git && cd ntfsotomatik
+git clone https://github.com/aselamt/nokext-ntfs.git && cd nokext-ntfs
 sudo ./kur.sh       # macFUSE (gerekirse) → derleme (sizin hesabınızla) → kurulum
 ```
 
@@ -40,6 +40,11 @@ Sonra Sistem Ayarları'nda:
 - Aygıtı kendisi açar, yetkiyi oturum açmış kullanıcıya düşürür; ntfs-3g **root olarak çalışmaz**.
 - ntfs-3g hep `norecover` ile çalışır; Windows günlüğü sıfırlanmaz, hazırda bekletme verisi silinmez.
 - Bildirimler tek yönlüdür: root bir dosyaya yazar, kullanıcı tarafındaki yardımcı yalnızca okur.
+
+## Adlar
+
+Projenin adı **NoKext NTFS**. İçeride (kurulum yolları, servis etiketleri, betikler) ilk çalışma adı
+kullanılmaya devam ediyor: `/Library/NTFSOtomatik`, `local.ntfsotomatik`, `ntfsotomatikd`.
 
 ## Lisans
 

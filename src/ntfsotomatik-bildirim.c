@@ -30,7 +30,7 @@ static void show(const char *msg) {
     for (char *p = text; *p; p++) if ((unsigned char)*p < 0x20) *p = ' ';
     char *argv[] = { "/usr/bin/osascript",
         "-e", "on run argv",
-        "-e", "display notification (item 1 of argv) with title \"NTFSOtomatik\"",
+        "-e", "display notification (item 1 of argv) with title \"NoKext NTFS\"",
         "-e", "end run",
         text, NULL };
     pid_t pid;

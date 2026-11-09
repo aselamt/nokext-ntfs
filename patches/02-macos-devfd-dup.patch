@@ -5,7 +5,7 @@
  	if (!NDevBlock(dev) && (flags & O_RDWR) == O_RDWR)
  		flags |= O_EXCL;
 +#ifdef __APPLE__
-+	/* NTFSOtomatik: root başlatıcının açıp devrettiği tanıtıcı (/dev/fd/N) yeniden
++	/* NoKext NTFS: root başlatıcının açıp devrettiği tanıtıcı (/dev/fd/N) yeniden
 +	 * açılmaz (macOS izin denetler), çoğaltılır. Erişim kipi uyuşmazsa reddedilir. */
 +	if (!strncmp(dev->d_name, "/dev/fd/", 8)) {
 +		char *end = NULL;

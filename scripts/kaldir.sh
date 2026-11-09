@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik'i kaldırır: yalnızca bu kurulumun eklediği parçalar silinir.
-# Kullanım: sudo kaldir.sh            (servis + NTFSOtomatik dosyaları)
+# NoKext NTFS'yi kaldırır: yalnızca bu kurulumun eklediği parçalar silinir.
+# Kullanım: sudo kaldir.sh            (servis + NoKext NTFS dosyaları)
 #           sudo kaldir.sh --macfuse  (ek olarak macFUSE'u kendi resmi kaldırıcısıyla kaldırır)
 . "$(dirname "$0")/ortak.sh"
 root_gerek
@@ -16,7 +16,7 @@ if [ "${1:-}" = "--macfuse" ]; then
   [ -x "$K" ] && /bin/bash "$K" && echo "macFUSE kaldırıldı."
 fi
 rm -rf "$N"
-echo "NTFSOtomatik kaldırıldı."
+echo "NoKext NTFS kaldırıldı."
 echo "Elle yapman gerekenler (Sistem Ayarları):"
 echo "  - Gizlilik ve Güvenlik > Tam Disk Erişimi: ntfsotomatikd, ntfs-baslatici, ntfs-3g satırlarını '−' ile sil"
 echo "  - macFUSE'u da kaldırdıysan: Genel > Oturum Açma Öğeleri ve Genişletmeler > Dosya Sistemi Genişletmeleri'nde macFUSE görünmez"

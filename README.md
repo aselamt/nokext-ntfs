@@ -1,4 +1,4 @@
-# NTFSOtomatik
+# NoKext NTFS
 
 Automatic, **write-enabled** mounting of external NTFS (Windows) drives on macOS 26/27 —
 using the open-source **ntfs-3g** driver and the **macFUSE FSKit backend** (no kernel extension,
@@ -63,7 +63,7 @@ Safety rules built in:
 ## Build & install
 
 ```sh
-git clone https://github.com/aselamt/ntfsotomatik.git && cd ntfsotomatik
+git clone https://github.com/aselamt/nokext-ntfs.git && cd nokext-ntfs
 sudo ./kur.sh
 ```
 
@@ -81,6 +81,12 @@ Then, in System Settings:
 
 Note: the binaries are ad-hoc signed, so Full Disk Access must be granted again whenever
 `ntfsotomatikd` is rebuilt.
+
+## Names
+
+The project is called **NoKext NTFS**. Internally (install paths, service labels, Turkish helper
+scripts) it still uses its original working name: `/Library/NTFSOtomatik`, `local.ntfsotomatik`,
+`ntfsotomatikd`.
 
 ## Management (Turkish command names)
 

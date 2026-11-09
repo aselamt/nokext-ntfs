@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik — derleme betiği (yönetici yetkisi GEREKMEZ; hiçbir şeyi sisteme kurmaz)
+# NoKext NTFS — derleme betiği (yönetici yetkisi GEREKMEZ; hiçbir şeyi sisteme kurmaz)
 #
 # Yaptıkları:
 #  1) ntfs-3g kaynak arşivini indirir ve SHA-256 ile doğrular
@@ -60,7 +60,7 @@ codesign -f -s - -o runtime --entitlements "$HERE/src/ntfs3g.entitlements" "$V/b
 otool -L "$V/bin/ntfs-3g" | grep -q "$PREFIX/lib/libfuse.2.dylib" || { echo "libfuse yolu yanlış"; exit 1; }
 if otool -L "$V/bin/ntfs-3g" | grep -Eq '/opt/homebrew|/usr/local'; then echo "Homebrew//usr/local bağımlılığı kaldı"; exit 1; fi
 cat > "$V/KAYNAK.txt" <<EOF
-NTFSOtomatik sürüm klasörü $VER
+NoKext NTFS sürüm klasörü $VER
 ntfs-3g $NTFS3G_VER — $NTFS3G_URL (SHA-256 $NTFS3G_SHA256)
 configure: --disable-ntfsprogs --disable-shared --enable-static --disable-crypto --disable-extras --with-fuse=external
 Yamalar: kaynak/*.patch (yalnızca macOS). libfuse.2.dylib: macFUSE'tan değiştirilmeden kopyalandı.

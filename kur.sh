@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik — TEK KOMUTLA kurulum:  sudo ./kur.sh
+# NoKext NTFS — TEK KOMUTLA kurulum:  sudo ./kur.sh
 #   1) macFUSE yoksa resmi sürümünü indirip doğrulayarak kurar (scripts/macfuse-kur.sh)
 #   2) dist/ yoksa ./build.sh'yi sizin hesabınızla (root olmadan) çalıştırır
 #   3) aşağıdaki parçaları kurar ve servisleri yükler
