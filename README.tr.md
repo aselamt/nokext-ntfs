@@ -13,12 +13,18 @@ Ayrıntılı kullanım: [KULLANIM.md](KULLANIM.md) · Tasarım ve macOS 27 bulgu
 
 ## Kurulum
 
-Gerekenler: macOS 26 veya 27, Xcode Command Line Tools, [macFUSE 5.5.0](https://macfuse.github.io) (ayrıca kurulur).
+Gerekenler: macOS 26 veya 27, Xcode Command Line Tools (`xcode-select --install`).
+**macFUSE gereklidir** (ntfs-3g macOS'a onun üzerinden bağlanır) ama ayrıca uğraşmanıza gerek yok:
+`kur.sh` yoksa onu resmi GitHub sürümünden indirir, SHA-256'sını, geliştirici imzasını ve Apple noter
+onayını doğrular ve yalnızca çekirdek (Core) bileşenini kurar.
 
 ```sh
-./build.sh          # ntfs-3g'yi indirir, SHA-256 doğrular, yamalar, dist/ içine derler (sudo gerekmez)
-sudo ./kur.sh       # /Library/NTFSOtomatik altına kurar, servisleri yükler
+git clone https://github.com/aselamt/ntfsotomatik.git && cd ntfsotomatik
+sudo ./kur.sh       # macFUSE (gerekirse) → derleme (sizin hesabınızla) → kurulum
 ```
+
+macOS komut satırından macFUSE kurulumuna izin vermezse Yükleyici penceresi açılır: *Özelleştir* →
+*macFUSE Preference Pane* işaretini kaldır → Yükle. Çekirdek uzantısı (kext) iznini **vermeyin**.
 
 Sonra Sistem Ayarları'nda:
 
@@ -38,4 +44,5 @@ Sonra Sistem Ayarları'nda:
 ## Lisans
 
 GPL-2.0-or-later ([LICENSE](LICENSE)). ntfs-3g © Tuxera ve katkıda bulunanlar.
-macFUSE © Benjamin Fleischer — bu depoda yer almaz, kendi lisansı vardır.
+macFUSE © Benjamin Fleischer — bu depoda yer almaz; kurulumda resmi sürümünden indirilir ve kendi
+lisansına tabidir (ticari olmayan dağıtıma izin verir, ticari yazılımla paketlenmesine izin vermez).

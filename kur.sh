@@ -1,24 +1,37 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# NTFSOtomatik — kurulum betiği. Önce ./build.sh çalıştırın, sonra: sudo ./kur.sh
+# NTFSOtomatik — TEK KOMUTLA kurulum:  sudo ./kur.sh
+#   1) macFUSE yoksa resmi sürümünü indirip doğrulayarak kurar (scripts/macfuse-kur.sh)
+#   2) dist/ yoksa ./build.sh'yi sizin hesabınızla (root olmadan) çalıştırır
+#   3) aşağıdaki parçaları kurar ve servisleri yükler
 #
 # Kurulanlar (hepsi root:wheel):
 #   /Library/NTFSOtomatik/{bin,betikler,durum,surumler/<sürüm>,current,onceki}
 #   /Library/LaunchDaemons/local.ntfsotomatik.plist
 #   /Library/LaunchAgents/local.ntfsotomatik.bildirim.plist
 #   /Library/Logs/NTFSOtomatik/
-# macFUSE'u bu betik KURMAZ (ayrıca, resmi paketinden kurulmalı).
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIST="$HERE/dist"
 . "$HERE/scripts/ortak.sh"
 root_gerek
 
-[ -f "$DIST/SURUM" ] || { echo "dist/ yok: önce (sudo olmadan) ./build.sh çalıştırın."; exit 1; }
 MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 26 ] || { echo "macOS 26 veya üstü gerekli (FSKit). Bu Mac: $(sw_vers -productVersion)"; exit 1; }
-[ -d /Library/Filesystems/macfuse.fs ] || { echo "macFUSE kurulu değil. https://macfuse.github.io"; exit 1; }
+xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools gerekli. Önce şunu çalıştırıp kurun: xcode-select --install"; exit 1; }
 bagliysa_dur
+
+echo "==> 1/3 macFUSE"
+/bin/sh "$HERE/scripts/macfuse-kur.sh"
+
+if [ ! -f "$DIST/SURUM" ]; then
+  echo "==> 2/3 derleme (root olmadan)"
+  [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] || { echo "Lütfen normal hesabınızdan 'sudo ./kur.sh' ile çalıştırın."; exit 1; }
+  sudo -u "$SUDO_USER" "$HERE/build.sh"
+else
+  echo "==> 2/3 dist/ hazır ($(cat "$DIST/SURUM")); derleme atlandı"
+fi
+echo "==> 3/3 kurulum"
 
 echo "==> dosyalar doğrulanıyor"
 (cd "$DIST" && shasum -a 256 -c SHA256SUMS >/dev/null) || { echo "dist/ içindeki dosyalar değişmiş; yeniden derleyin."; exit 1; }

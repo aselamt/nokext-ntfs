@@ -24,8 +24,8 @@ BUILD="$HERE/build"; DIST="$HERE/dist"
 PREFIX=/Library/NTFSOtomatik/surumler/$VER     # ntfs-3g'nin libfuse'u arayacağı kesin yol
 
 [ -f /usr/local/lib/libfuse.2.dylib ] && [ -f /usr/local/include/fuse/fuse.h ] || {
-  echo "macFUSE bulunamadı. Önce https://macfuse.github.io adresinden macFUSE 5.5.0'ı kurun."; exit 1; }
-command -v clang >/dev/null || { echo "Xcode Command Line Tools gerekli: xcode-select --install"; exit 1; }
+  echo "macFUSE bulunamadı. Önce: sudo scripts/macfuse-kur.sh  (ya da doğrudan: sudo ./kur.sh)"; exit 1; }
+xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools gerekli: xcode-select --install"; exit 1; }
 
 rm -rf "$BUILD" "$DIST"; mkdir -p "$BUILD/dl" "$DIST"
 

@@ -55,7 +55,7 @@ Hepsi `root:wheel`'e aittir; kullanıcı hesabı değiştiremez.
 | `/Library/LaunchAgents/local.ntfsotomatik.bildirim.plist` | bildirim yardımcısının başlatma ayarı |
 | `/Library/Logs/NTFSOtomatik/` | günlük (en fazla 1 MB + 3 eski dosya) |
 
-macFUSE (ayrıca kurulur): `/Library/Filesystems/macfuse.fs`, `/Library/Frameworks/macFUSE.framework`,
+macFUSE (kur.sh gerekirse resmi sürümünü indirip kurar): `/Library/Filesystems/macfuse.fs`, `/Library/Frameworks/macFUSE.framework`,
 `/usr/local/lib/libfuse*`, `/usr/local/include/fuse*`, `/Library/LaunchDaemons/io.macfuse.app.launchservice.daemon.plist`,
 `/Library/PrivilegedHelperTools/io.macfuse.app.launchservice.daemon`.
 

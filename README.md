@@ -56,14 +56,22 @@ Safety rules built in:
 
 - macOS 26 or 27 (developed and tested on macOS 27.2, Apple Silicon M4)
 - Xcode Command Line Tools (`xcode-select --install`)
-- [macFUSE](https://macfuse.github.io) **5.5.0** (Core is enough; installed separately, not bundled)
+- [macFUSE](https://macfuse.github.io) **5.5.0** — required (ntfs-3g talks to macOS through it).
+  `kur.sh` installs it automatically if it is missing: it downloads the official release from GitHub,
+  checks its SHA-256, the developer signature and Apple notarization, and installs only the Core component.
 
 ## Build & install
 
 ```sh
-./build.sh                 # downloads ntfs-3g 2026.9.28, verifies SHA-256, applies patches, builds into dist/
-sudo ./kur.sh              # installs into /Library/NTFSOtomatik and loads the launchd jobs
+git clone https://github.com/aselamt/ntfsotomatik.git && cd ntfsotomatik
+sudo ./kur.sh
 ```
+
+`kur.sh` does everything in one go: installs macFUSE if needed → runs `build.sh` as your user
+(downloads ntfs-3g 2026.9.28, verifies SHA-256, applies the patches, builds into `dist/`) →
+installs into `/Library/NTFSOtomatik` and loads the launchd jobs.
+If macOS refuses the command-line macFUSE install, the macOS Installer window is opened instead:
+choose *Customize*, untick *macFUSE Preference Pane*, install, and **do not** allow the kernel extension.
 
 Then, in System Settings:
 
@@ -104,4 +112,6 @@ All of them refuse to run while an NTFS disk is mounted by ntfs-3g. Log: `/Libra
 ## License
 
 GPL-2.0-or-later (see [LICENSE](LICENSE)); the patches modify ntfs-3g, which is GPL.
-ntfs-3g © Tuxera and contributors. macFUSE © Benjamin Fleischer — not included; it has its own license.
+ntfs-3g © Tuxera and contributors. macFUSE © Benjamin Fleischer — not included in this repository;
+it is downloaded from its official release at install time and is covered by its own license
+(non-commercial redistribution permitted; bundling with commercial software is not).
