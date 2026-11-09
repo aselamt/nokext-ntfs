@@ -1,0 +1,18 @@
+#!/bin/sh
+# Minimal pkg-config stand-in: only knows macFUSE's fuse.pc (2.9.9)
+out=""
+for a in "$@"; do
+  case "$a" in
+    --version) echo 0.29.2; exit 0;;
+    --atleast-pkgconfig-version*) exit 0;;
+    --modversion) out="$out 2.9.9";;
+    --cflags) out="$out -I/usr/local/include/fuse -D_FILE_OFFSET_BITS=64";;
+    --libs) out="$out -L/usr/local/lib -lfuse -pthread";;
+    --libs-only-L) out="$out -L/usr/local/lib";;
+    --exists|--print-errors|--short-errors|--errors-to-stdout) ;;
+    fuse|">="|"2.6.0"|"fuse >= 2.6.0") ;;
+    *) echo "fake pkg-config: unknown arg $a" >&2; exit 1;;
+  esac
+done
+[ -n "$out" ] && echo $out
+exit 0

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.ntfsotomatik</string>
+  <key>Program</key><string>/Library/NTFSOtomatik/bin/ntfsotomatikd</string>
+  <key>ProgramArguments</key><array><string>/Library/NTFSOtomatik/bin/ntfsotomatikd</string></array>
+  <!-- Aşama 4: otomatik başlama AÇIK -->
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- servis durdurulursa bağlı diskler kesilmesin (zorla ayırma yok) -->
+  <key>AbandonProcessGroup</key><true/>
+  <key>StandardInPath</key><string>/dev/null</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
+</dict>
+</plist>

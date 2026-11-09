@@ -1,0 +1,41 @@
+# NTFSOtomatik
+
+macOS 26/27'de harici NTFS (Windows) diskleri **kendiliğinden ve yazılabilir** bağlar.
+Açık kaynak **ntfs-3g** sürücüsünü ve **macFUSE FSKit** yöntemini kullanır: çekirdek uzantısı (kext),
+Kurtarma Modu ya da güvenlik düşürme gerekmez.
+
+Diski tak → yazılabilir bağlanır → bildirim gelir. İşin bitince Finder'dan çıkar (⏏).
+
+> **Garanti değildir.** "Verilerim kaybolmasın" bir tasarım hedefidir, garanti değil.
+> Önemli dosyalarının mutlaka başka bir yerde yedeği olsun.
+
+Ayrıntılı kullanım: [KULLANIM.md](KULLANIM.md) · Tasarım ve macOS 27 bulguları: [docs/TASARIM.md](docs/TASARIM.md)
+
+## Kurulum
+
+Gerekenler: macOS 26 veya 27, Xcode Command Line Tools, [macFUSE 5.5.0](https://macfuse.github.io) (ayrıca kurulur).
+
+```sh
+./build.sh          # ntfs-3g'yi indirir, SHA-256 doğrular, yamalar, dist/ içine derler (sudo gerekmez)
+sudo ./kur.sh       # /Library/NTFSOtomatik altına kurar, servisleri yükler
+```
+
+Sonra Sistem Ayarları'nda:
+
+1. **Gizlilik ve Güvenlik → Tam Disk Erişimi → +** → `/Library/NTFSOtomatik/bin/ntfsotomatikd`
+2. **Genel → Oturum Açma Öğeleri ve Genişletmeler → Dosya Sistemi Genişletmeleri (ⓘ)** →
+   **macFUSE** ve **macFUSE (local)** açık (ilk NTFS disk takılınca listede görünür).
+
+## Nasıl çalışır?
+
+- Root servis (`ntfsotomatikd`) yalnızca disk takma/çıkarma olaylarını dinler, dışarıdan komut almaz.
+- Yalnızca harici NTFS bölümlerine dokunur; APFS, exFAT, FAT32, HFS+ ve dahili disklere dokunmaz.
+- macOS'un aynı bölümü kendi sürücüsüyle bağlamasını engeller (çift bağlama veri bozabilir).
+- Aygıtı kendisi açar, yetkiyi oturum açmış kullanıcıya düşürür; ntfs-3g **root olarak çalışmaz**.
+- ntfs-3g hep `norecover` ile çalışır; Windows günlüğü sıfırlanmaz, hazırda bekletme verisi silinmez.
+- Bildirimler tek yönlüdür: root bir dosyaya yazar, kullanıcı tarafındaki yardımcı yalnızca okur.
+
+## Lisans
+
+GPL-2.0-or-later ([LICENSE](LICENSE)). ntfs-3g © Tuxera ve katkıda bulunanlar.
+macFUSE © Benjamin Fleischer — bu depoda yer almaz, kendi lisansı vardır.

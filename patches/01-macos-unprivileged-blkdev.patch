@@ -1,0 +1,11 @@
+--- src/ntfs-3g.c.orig	2026-11-07 18:30:03
++++ src/ntfs-3g.c	2026-11-07 18:30:03
+@@ -4445,7 +4445,7 @@
+ 		ctx->blkdev = TRUE;
+ #endif
+ 
+-#ifndef FUSE_INTERNAL
++#if !defined(FUSE_INTERNAL) && !defined(__APPLE__) /* NTFSOtomatik: macOS FSKit; aygıtı root başlatıcı açar */
+ 	if (getuid() && ctx->blkdev) {
+ 		ntfs_log_error("%s", unpriv_fuseblk_msg);
+ 		err = NTFS_VOLUME_NO_PRIVILEGE;

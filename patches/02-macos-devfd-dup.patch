@@ -1,0 +1,27 @@
+--- libntfs-3g/unix_io.c.orig	2026-11-07 18:40:18
++++ libntfs-3g/unix_io.c	2026-11-07 18:40:18
+@@ -140,6 +140,24 @@
+ 	 */ 
+ 	if (!NDevBlock(dev) && (flags & O_RDWR) == O_RDWR)
+ 		flags |= O_EXCL;
++#ifdef __APPLE__
++	/* NTFSOtomatik: root başlatıcının açıp devrettiği tanıtıcı (/dev/fd/N) yeniden
++	 * açılmaz (macOS izin denetler), çoğaltılır. Erişim kipi uyuşmazsa reddedilir. */
++	if (!strncmp(dev->d_name, "/dev/fd/", 8)) {
++		char *end = NULL;
++		long n = strtol(dev->d_name + 8, &end, 10);
++		int fl;
++		if (!end || *end || n < 0 || n > 1023
++		    || (fl = fcntl((int)n, F_GETFL)) == -1) {
++			errno = EBADF;
++			*(int*)dev->d_private = -1;
++		} else if ((flags & O_RDWR) == O_RDWR && (fl & O_ACCMODE) != O_RDWR) {
++			errno = EACCES;
++			*(int*)dev->d_private = -1;
++		} else
++			*(int*)dev->d_private = fcntl((int)n, F_DUPFD_CLOEXEC, 0);
++	} else
++#endif
+ 	*(int*)dev->d_private = open(dev->d_name, flags);
+ 	if (*(int*)dev->d_private == -1) {
+ 		err = errno;
