@@ -157,6 +157,9 @@ static void onceki_servisin_ntfs3g(int cekilir) {
                   : "önceki servisin ntfs-3g'si: Finder'dan çıkarma");
     sahte_disk_tak("disk4s2", "66666666-6666-6666-6666-666666666666", "ESKISERVIS", 0);
     pid_t eski = sahte_ntfs3g_onceki_servis("disk4s2");
+    char kayit[200];   /* önceki servisin yazdığı bağlama noktası kaydı */
+    snprintf(kayit, sizeof kayit, "%d\tdisk4s2\t/Volumes/onceki-disk4s2\n", (int)eski);
+    sahte_dosya_yaz("baglar", kayit);
     disk_appeared(sahte_disk_ref("disk4s2"), NULL);   /* yeni servis açılışta diski görür */
     BEKLE(sahte_ntfs3g_sayisi() == 1, "bağlı disk için ikinci ntfs-3g başladı (%d çalışıyor)", sahte_ntfs3g_sayisi());
     BEKLE(sahte_gunluk_var("bitişi izleniyor"), "devralınan ntfs-3g izlenmiyor");
@@ -166,6 +169,8 @@ static void onceki_servisin_ntfs3g(int cekilir) {
         sahte_disk_cek("disk4s2");
         disk_disappeared(sahte_disk_ref_eski("disk4s2"), NULL);
         BEKLE(sahte_bildirim_var("“ESKISERVIS” Finder'dan çıkarılmadan çekildi"), "çekme bildirilmedi");
+        sahte_kuyrugu_calistir();
+        BEKLE(sahte_unmount_sayisi("/Volumes/onceki-disk4s2") == 1, "devralınan diskin Finder'daki bağlantısı kaldırılmadı");
         sahte_ntfs3g_bitti(eski, 1);
         BEKLE(sahte_gunluk_var("devralınan ntfs-3g bitti"), "devralınan ntfs-3g'nin bitişi günlüğe yazılmadı");
         sahte_disk_tak("disk4s2", "66666666-6666-6666-6666-666666666666", "ESKISERVIS", 0);
@@ -184,6 +189,80 @@ static void onceki_servisin_ntfs3g(int cekilir) {
     BEKLE(sahte_waitpid_yabanci() == 0, "çocuk olmayan sürece waitpid çağrıldı");
 }
 
+
+/* Bağlama 45 sn'de olmaz: SIGTERM, 15 sn sonra hâlâ bitmediyse SIGKILL; ntfs-3g'nin gerçek hatası korunur. */
+static void zaman_asimi(void) {
+    basla("bağlama zaman aşımı: SIGTERM, SIGKILL ve gerçek hata");
+    sahte_disk_tak("disk4s1", "77777777-7777-7777-7777-777777777777", "YAVAS", 0);
+    disk_appeared(sahte_disk_ref("disk4s1"), NULL);
+    pid_t pid = sahte_ntfs3g_pid("disk4s1");
+    BEKLE(pid > 0, "ntfs-3g başlamadı");
+    sahte_ntfs3g_yaz(pid, "MFMount: MFMount(_:_:_:_:): Failed to initialize volume\n");
+    sahte_okuma_tetikle();
+    sahte_saniye_ilerlet(44);
+    BEKLE(sahte_son_sinyal(pid) == 0, "45 sn dolmadan sinyal gönderildi");
+    sahte_saniye_ilerlet(1);
+    BEKLE(sahte_son_sinyal(pid) == SIGTERM, "45 sn'de SIGTERM gönderilmedi");
+    sahte_saniye_ilerlet(KILL_WAIT);
+    BEKLE(sahte_son_sinyal(pid) == SIGKILL, "SIGTERM'den sonra bitmeyen ntfs-3g'ye SIGKILL gönderilmedi");
+    BEKLE(macos_reddedildi("disk4s1"), "ntfs-3g çalışırken macOS'un bağlamasına izin verildi");
+    sahte_ntfs3g_bitti(pid, 0);   /* SIGKILL ile bitti; ntfs-3g'nin çıkış kodu güvenilmez */
+    sahte_da_islem *bagla = sahte_da_bekleyen(1, "disk4s1");
+    BEKLE(bagla != NULL, "salt-okunur yedek bağlama istenmedi");
+    if (!bagla) return;
+    sahte_da_bitir(bagla, 0);
+    BEKLE(sahte_bildirim_var("Failed to initialize volume; 45 sn içinde bağlanamadı"), "bildirimde ntfs-3g'nin gerçek hatası yok");
+}
+
+/* SIGTERM'den sonra geç bağlanan ntfs-3g zorla öldürülmez (SIGTERM işleyicisi birimi kendisi ayırır). */
+static void gec_baglanma(void) {
+    basla("SIGTERM'den sonra geç bağlanma: SIGKILL yok");
+    sahte_disk_tak("disk4s1", "88888888-8888-8888-8888-888888888888", "GEC", 0);
+    disk_appeared(sahte_disk_ref("disk4s1"), NULL);
+    pid_t pid = sahte_ntfs3g_pid("disk4s1");
+    sahte_saniye_ilerlet(MOUNT_WAIT + 2);
+    BEKLE(sahte_son_sinyal(pid) == SIGTERM, "SIGTERM gönderilmedi");
+    sahte_ntfs3g_baglandi(pid);
+    sahte_saniye_ilerlet(KILL_WAIT);
+    BEKLE(sahte_son_sinyal(pid) == SIGTERM, "bağlanmış ntfs-3g'ye SIGKILL gönderildi (birim düzgün ayrılamaz)");
+    BEKLE(!sahte_bildirim_var("“GEC” yazılabilir olarak bağlandı"), "durdurulan bağlama başarılı diye bildirildi");
+}
+
+/* ntfs-3g birimi kapatırken hata yazar ama 0 ile çıkar; çıktı süreç bitişinden sonra okunur. */
+static void kapanis_hatasi(int hata) {
+    basla(hata ? "Finder'dan çıkarma: kapanışta yazma hatası (çıkış kodu 0)" : "Finder'dan çıkarma: temiz kapanış");
+    sahte_disk_tak("disk4s1", "99999999-9999-9999-9999-999999999999", "KAPANIS", 0);
+    disk_appeared(sahte_disk_ref("disk4s1"), NULL);
+    pid_t pid = sahte_ntfs3g_pid("disk4s1");
+    ntfs3g_baglansin("disk4s1");
+    BEKLE(sahte_dosya_var("baglar", "/Volumes/KAPANIS"), "bağlama noktası kaydedilmedi");
+    sahte_ntfs3g_yaz(pid, "Unmounting /dev/fd/3 (KAPANIS)\n");
+    if (hata) sahte_ntfs3g_yaz(pid, "Failed to close volume /dev/fd/3: Input/output error");   /* son satırda \n yok */
+    sahte_ntfs3g_bitti(pid, 0);   /* okuma olayı tetiklenmeden süreç biter */
+    if (hata) {
+        BEKLE(sahte_bildirim_var("“KAPANIS” ayrılırken diske yazma hatası"), "kapanış hatası bildirilmedi");
+        BEKLE(!sahte_gunluk_var("düzgün çıkarıldı"), "kapanış hatası 'düzgün çıkarıldı' diye kaydedildi");
+    } else {
+        BEKLE(sahte_gunluk_var("düzgün çıkarıldı"), "temiz çıkarma kaydedilmedi");
+        BEKLE(!sahte_bildirim_var("hata"), "temiz çıkarma hata gibi bildirildi");
+    }
+    BEKLE(!sahte_dosya_var("baglar", "/Volumes/KAPANIS"), "çıkarılan diskin kaydı silinmedi");
+}
+
+/* Yeni servis, giriş yapmış kullanıcı yokken açılır; disk önceki servisin ntfs-3g'si ile bağlı.
+ * Salt-okunur yedek yol, aygıt kilitliyken macOS'a bağlatmamalı. */
+static void kullanici_yokken_devralma(void) {
+    basla("kullanıcı yokken önceki servisin ntfs-3g'si: macOS'a bırakılmaz");
+    sahte_disk_tak("disk4s2", "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "KILITLI", 0);
+    sahte_ntfs3g_onceki_servis("disk4s2");
+    sahte_konsol_yok(1);
+    disk_appeared(sahte_disk_ref("disk4s2"), NULL);
+    BEKLE(sahte_da_bekleyen(1, "disk4s2") == NULL, "kilitli aygıt için macOS salt-okunur bağlama istendi (çift bağlama)");
+    BEKLE(sahte_gunluk_var("aygıt kilitli"), "kilit günlüğe yazılmadı");
+    BEKLE(macos_reddedildi("disk4s2"), "kilitli aygıt için macOS bağlamasına izin verildi");
+    BEKLE(sahte_ntfs3g_sayisi() == 1, "ikinci ntfs-3g başladı");
+}
+
 int main(int argc, char **argv) {
     snprintf(g_klasor, sizeof g_klasor, "%s", argc > 1 ? argv[1] : ".");
     finder_cikarma();
@@ -197,6 +276,11 @@ int main(int argc, char **argv) {
     klon_diskler(1);
     onceki_servisin_ntfs3g(0);
     onceki_servisin_ntfs3g(1);
+    zaman_asimi();
+    gec_baglanma();
+    kapanis_hatasi(0);
+    kapanis_hatasi(1);
+    kullanici_yokken_devralma();
     gunluk_goster();
     printf("\n%d/%d denetim geçti\n", g_toplam - g_hata, g_toplam);
     return g_hata ? 1 : 0;

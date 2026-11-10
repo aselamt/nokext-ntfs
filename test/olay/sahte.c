@@ -16,6 +16,7 @@
 #undef unmount
 #undef fcntl
 #undef getpwnam
+#undef pipe
 #undef main
 
 /* ---------- blok çalışma zamanı (yalnızca Apple dışı; macOS'ta libSystem'de var) ---------- */
@@ -148,7 +149,9 @@ void DARegisterDiskAppearedCallback(DASessionRef s, CFDictionaryRef m, DADiskApp
 void DARegisterDiskDescriptionChangedCallback(DASessionRef s, CFDictionaryRef m, CFArrayRef w, DADiskDescriptionChangedCallback c, void *x) { (void)s; (void)m; (void)w; (void)c; (void)x; }
 void DARegisterDiskDisappearedCallback(DASessionRef s, CFDictionaryRef m, DADiskDisappearedCallback c, void *x) { (void)s; (void)m; (void)c; (void)x; }
 
-CFStringRef SCDynamicStoreCopyConsoleUser(void *s, uid_t *u, gid_t *g) { (void)s; *u = 501; *g = 20; return metin("deneme"); }
+static int g_konsol_yok;
+CFStringRef SCDynamicStoreCopyConsoleUser(void *s, uid_t *u, gid_t *g) { (void)s; *u = 501; *g = 20; return g_konsol_yok ? NULL : metin("deneme"); }
+void sahte_konsol_yok(int yok) { g_konsol_yok = yok; }
 
 /* ---------- libdispatch ---------- */
 struct sahte_kaynak { dispatch_source_type_t tur; uintptr_t tutamak; dispatch_block_t olay, iptal; int iptal_edildi; };
@@ -178,6 +181,7 @@ dispatch_source_t dispatch_source_create(dispatch_source_type_t t, uintptr_t h, 
 void dispatch_source_set_event_handler(dispatch_source_t k, dispatch_block_t b) { k->olay = _Block_copy(b); }
 void dispatch_source_set_cancel_handler(dispatch_source_t k, dispatch_block_t b) { k->iptal = _Block_copy(b); }
 void dispatch_resume(dispatch_source_t k) { (void)k; }
+void dispatch_release(dispatch_source_t k) { (void)k; }
 void dispatch_source_cancel(dispatch_source_t k) {
     if (k->iptal_edildi) return;
     k->iptal_edildi = 1;
@@ -187,7 +191,9 @@ void dispatch_source_cancel(dispatch_source_t k) {
 /* ---------- sistem çağrıları ---------- */
 static char g_klasor[1024];
 static char g_dizinler[MAKS][1024]; static int g_dizin_n;
-static struct { pid_t pid; char bsd[32]; char mnt[1024]; int bagli, bitti, kod, yabanci; } g_ntfs3g[MAKS]; static int g_ntfs3g_n;
+static struct { pid_t pid; char bsd[32]; char mnt[1024]; int bagli, bitti, kod, yabanci, yaz, sinyal; } g_ntfs3g[MAKS]; static int g_ntfs3g_n;
+static int g_son_yaz = -1;
+static struct { char yol[1024]; } g_unmount[MAKS]; static int g_unmount_n;
 static int g_waitpid_yabanci;
 static char g_son_aygit[64], g_son_dizin[1024];
 
@@ -244,8 +250,16 @@ pid_t sahte_fork(void) {
     g_ntfs3g[g_ntfs3g_n].pid = pid;
     snprintf(g_ntfs3g[g_ntfs3g_n].bsd, sizeof g_ntfs3g[0].bsd, "%s", g_son_aygit);
     snprintf(g_ntfs3g[g_ntfs3g_n].mnt, sizeof g_ntfs3g[0].mnt, "%s", g_son_dizin);
+    g_ntfs3g[g_ntfs3g_n].yaz = g_son_yaz; g_son_yaz = -1;
     g_ntfs3g_n++;
     return pid;
+}
+/* servis boruyu açar; yazma ucunun bir kopyası sahte ntfs-3g için saklanır (servis kendi ucunu kapatır) */
+int sahte_pipe(int *p) {
+    if (pipe(p) != 0) return -1;
+    if (g_son_yaz >= 0) close(g_son_yaz);
+    g_son_yaz = dup(p[1]);
+    return 0;
 }
 static int ntfs3g_bul(pid_t pid) { for (int i = 0; i < g_ntfs3g_n; i++) if (g_ntfs3g[i].pid == pid) return i; return -1; }
 pid_t sahte_waitpid(pid_t pid, int *st, int o) {
@@ -255,11 +269,13 @@ pid_t sahte_waitpid(pid_t pid, int *st, int o) {
     if (st) *st = (g_ntfs3g[i].kod & 0xff) << 8;
     return pid;
 }
-int sahte_kill(pid_t pid, int s) { (void)pid; (void)s; return 0; }
-int sahte_unmount(const char *p, int f) { (void)p; (void)f; return 0; }
+int sahte_kill(pid_t pid, int s) { int i = ntfs3g_bul(pid); if (i >= 0) g_ntfs3g[i].sinyal = s; return 0; }
+int sahte_unmount(const char *p, int f) { (void)f; if (g_unmount_n < MAKS) snprintf(g_unmount[g_unmount_n++].yol, sizeof g_unmount[0].yol, "%s", p); return 0; }
 int sahte_fcntl(int fd, int cmd, ...) {
-    va_list ap; va_start(ap, cmd); void *a = va_arg(ap, void *); va_end(ap);
-    if (cmd == F_GETLK) {
+    va_list ap; va_start(ap, cmd);
+    if (cmd != F_GETLK) { int x = cmd == F_GETFL || cmd == F_GETFD ? 0 : va_arg(ap, int); va_end(ap); return fcntl(fd, cmd, x); }
+    void *a = va_arg(ap, void *); va_end(ap);
+    {
         /* son açılan aygıtı bitmemiş bir ntfs-3g tutuyorsa kilit onun (fork edilenler henüz kilit almadı) */
         struct flock *fl = a; fl->l_type = F_UNLCK;
         for (int i = 0; i < g_ntfs3g_n; i++)
@@ -268,7 +284,6 @@ int sahte_fcntl(int fd, int cmd, ...) {
             }
         return 0;
     }
-    return fcntl(fd, cmd, a);
 }
 struct passwd *sahte_getpwnam(const char *n) {
     static struct passwd pw; static char ad[64];
@@ -285,6 +300,7 @@ pid_t sahte_ntfs3g_pid(const char *bsd) {
 void sahte_ntfs3g_baglandi(pid_t pid) { int i = ntfs3g_bul(pid); if (i >= 0) g_ntfs3g[i].bagli = 1; }
 void sahte_ntfs3g_bitti(pid_t pid, int kod) {
     int i = ntfs3g_bul(pid); if (i < 0) return;
+    if (g_ntfs3g[i].yaz >= 0) { close(g_ntfs3g[i].yaz); g_ntfs3g[i].yaz = -1; }   /* boru kapanır (EOF) */
     g_ntfs3g[i].bitti = 1; g_ntfs3g[i].bagli = 0; g_ntfs3g[i].kod = kod;
     for (int k = 0; k < g_kaynak_n; k++)
         if (g_kaynak[k]->tur == DISPATCH_SOURCE_TYPE_PROC && g_kaynak[k]->tutamak == (uintptr_t)pid && !g_kaynak[k]->iptal_edildi && g_kaynak[k]->olay)
@@ -295,6 +311,7 @@ void sahte_ntfs3g_bitti(pid_t pid, int kod) {
 pid_t sahte_ntfs3g_onceki_servis(const char *bsd) {
     pid_t pid = 9000 + g_ntfs3g_n;
     memset(&g_ntfs3g[g_ntfs3g_n], 0, sizeof g_ntfs3g[0]);
+    g_ntfs3g[g_ntfs3g_n].yaz = -1;
     g_ntfs3g[g_ntfs3g_n].pid = pid; g_ntfs3g[g_ntfs3g_n].bagli = 1; g_ntfs3g[g_ntfs3g_n].yabanci = 1;
     snprintf(g_ntfs3g[g_ntfs3g_n].bsd, sizeof g_ntfs3g[0].bsd, "%s", bsd);
     snprintf(g_ntfs3g[g_ntfs3g_n].mnt, sizeof g_ntfs3g[0].mnt, "/Volumes/onceki-%s", bsd);
@@ -302,6 +319,16 @@ pid_t sahte_ntfs3g_onceki_servis(const char *bsd) {
     return pid;
 }
 int sahte_waitpid_yabanci(void) { return g_waitpid_yabanci; }
+void sahte_ntfs3g_yaz(pid_t pid, const char *m) {
+    int i = ntfs3g_bul(pid);
+    if (i >= 0 && g_ntfs3g[i].yaz >= 0) { ssize_t r = write(g_ntfs3g[i].yaz, m, strlen(m)); (void)r; }
+}
+int sahte_son_sinyal(pid_t pid) { int i = ntfs3g_bul(pid); return i >= 0 ? g_ntfs3g[i].sinyal : 0; }
+int sahte_unmount_sayisi(const char *yol) { int n = 0; for (int i = 0; i < g_unmount_n; i++) if (!strcmp(g_unmount[i].yol, yol)) n++; return n; }
+void sahte_dosya_yaz(const char *ad, const char *m) {
+    char p[1100]; snprintf(p, sizeof p, "%s/%s", g_klasor, ad);
+    FILE *f = fopen(p, "w"); if (f) { fputs(m, f); fclose(f); }
+}
 
 static int dosyada_var(const char *ad, const char *parca) {
     char p[1100]; snprintf(p, sizeof p, "%s/%s", g_klasor, ad);
@@ -311,6 +338,13 @@ static int dosyada_var(const char *ad, const char *parca) {
     fclose(f); return var;
 }
 int sahte_gunluk_var(const char *parca) { return dosyada_var("ntfsotomatik.log", parca); }
+int sahte_dosya_var(const char *ad, const char *parca) { return dosyada_var(ad, parca); }
+void sahte_okuma_tetikle(void) {
+    for (int k = 0; k < g_kaynak_n; k++)
+        if (g_kaynak[k]->tur == DISPATCH_SOURCE_TYPE_READ && !g_kaynak[k]->iptal_edildi && g_kaynak[k]->olay)
+            dispatch_async(&g_ana, g_kaynak[k]->olay);
+    sahte_kuyrugu_calistir();
+}
 
 int sahte_bildirim_var(const char *parca) {
     char p[1100]; snprintf(p, sizeof p, "%s/bildirim", g_klasor);
@@ -325,7 +359,11 @@ void sahte_sifirla(const char *klasor) {
     char p[1100];
     snprintf(p, sizeof p, "%s/bildirim", klasor); unlink(p);
     snprintf(p, sizeof p, "%s/ntfsotomatik.log", klasor); unlink(p);
+    snprintf(p, sizeof p, "%s/baglar", klasor); unlink(p);
     sahte_kuyrugu_calistir();
+    for (int i = 0; i < g_ntfs3g_n; i++) if (g_ntfs3g[i].yaz >= 0) close(g_ntfs3g[i].yaz);
+    if (g_son_yaz >= 0) { close(g_son_yaz); g_son_yaz = -1; }
+    g_unmount_n = 0; g_konsol_yok = 0;
     g_dunya_n = 0; g_islem_n = 0; g_dizin_n = 0; g_ntfs3g_n = 0; g_zaman_n = 0; g_kaynak_n = 0;
     g_kuyruk_bas = g_kuyruk_son = 0; g_simdi = 0; g_waitpid_yabanci = 0;
     if (!kDADiskDescriptionVolumeKindKey) {

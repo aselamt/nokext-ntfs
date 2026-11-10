@@ -53,9 +53,27 @@ Darwin'de ntfs-3g'nin `nfconv` özelliği açıktır (adlar macOS'a ayrışık/N
 - Her kayıt takıldığında benzersiz bir oturum numarası alır. Gecikmeli DiskArbitration sonuçları (macOS bağlantısını
   ayırma, salt-okunur yedek bağlama) kayda yuva işaretçisiyle değil bu numarayla ulaşır: disk bu arada çekilip yuva başka
   diske verildiyse eski sonuç yok sayılır (aksi halde yeni disk ntfs-3g ile bağlıyken macOS'a da bırakılabiliyordu).
-- Bakım betikleri (`kur.sh`, `guncelle.sh`, `geri-al.sh`, `kaldir.sh`, `servis.sh kapat`) önce servisi durdurur, **sonra**
-  bağlı / bağlanmakta olan ntfs-3g olup olmadığına bakar; böylece kontrol ile dosya değişikliği arasında yeni bağlama başlayamaz.
-  Betik yarıda kalırsa servis eski haline getirilir. `current`/`onceki` birlikte değişir; ikincisi olmazsa birincisi geri çevrilir.
+- Bakım betikleri (`kur.sh`, `guncelle.sh`, `geri-al.sh`, `kaldir.sh`, `servis.sh kapat`) önce, servis **çalışırken** bağlı ya da
+  bağlanmakta olan ntfs-3g var mı diye bakar; varsa servise hiç dokunmaz. Servis dururken macOS'un kendi bağlama isteklerini
+  reddeden kimse olmadığı için bağlı diskle servisi durdurmak çift bağlamaya kapı açar. Yoksa servisi durdurur ve **yeniden**
+  bakar; böylece kontrol ile dosya değişikliği arasında yeni bağlama başlayamaz. Betik yarıda kalırsa servis eski haline
+  getirilir. `current`/`onceki` birlikte değişir; ikincisi olmazsa birincisi geri çevrilir. Bakım betikleri `set -eu` ile çalışır;
+  `guncelle.sh` kopyalama ya da deneme adımı başarısız olursa yarım sürüm klasörünü siler. Sürüm adı tüm dizge üzerinden denetlenir
+  (çok satırlı değer, `.` ve `..` reddedilir).
+- Aygıtı bir ntfs-3g kilitlemişse (yazılabilirken `F_WRLCK`, salt-okunurken `F_RDLCK`) macOS'a salt-okunur bağlatılmaz: hem yedek
+  yol hem bağlama onayı geri çağrısı kilidi denetler. Servis yeniden başlayıp çalışan bir ntfs-3g'yi devraldığında bağlama
+  noktasını `/Library/NTFSOtomatik/durum/baglar` dosyasından (pid + aygıt + bağlama noktası, root:wheel) öğrenir; disk
+  çekilirse Finder'daki bağlantıyı zorlamadan kaldırabilir.
+- ntfs-3g alt süreci başlatılırken tüm sinyaller varsayılana döndürülür. Servis SIGTERM'i yok sayar (dispatch kaynağıyla yakalar);
+  yok sayılan sinyal `execve` sonrasında da yok sayılı kalır ve libfuse yalnızca varsayılan durumdaki sinyallere işleyici kurar.
+  Bu düzeltilmeden önce ntfs-3g SIGTERM ile durdurulamıyordu (günlükte 45 sn zaman aşımından sonra dakikalarca çalışmaya devam
+  etti) ve Mac kapanırken birimi düzgün ayıramayabilirdi. fork sonrası yalnızca async-signal-safe çağrılar yapılır; kullanıcı
+  grupları (`getgrouplist`) ve ortam ana süreçte hazırlanır.
+- Bağlama 45 sn'de olmazsa SIGTERM, 15 sn sonra hâlâ bağlanmamış ve çalışıyorsa SIGKILL gönderilir; bağlandıysa öldürülmez
+  (SIGTERM işleyicisi birimi kendisi ayırır). Bildirimde ntfs-3g'nin yazdığı gerçek hata korunur.
+- ntfs-3g'nin çıkış koduna güvenilmez: birimi kapatma (son eşitleme) hatasını yalnızca yazar ve 0 ile çıkar. Servis süreç bitince
+  önce borudaki kalan çıktıyı okur (boru engellemesiz), `Failed to close volume` / `Failed to sync` / `Error writing` gördüyse
+  "düzgün çıkarıldı" demez, kullanıcıya yazma hatası bildirir.
 - macFUSE kurucusu geçici dosyalarını yalnızca root'un mktemp ile oluşturduğu klasörde tutar (`/tmp`'de sabit ad yok).
 - Bağlama noktası adı ve `volname` temizlenir (`/ : , = \ "`, denetim karakterleri, `.`/`..`; virgül ntfs-3g seçeneği enjekte edemesin diye).
 - Root ile kullanıcı arasında tek yönlü iletişim: root, `root:wheel 0644` bir dosyaya satır ekler; kullanıcı ajanı yalnızca okur
@@ -82,7 +100,9 @@ Darwin'de ntfs-3g'nin `nfconv` özelliği açıktır (adlar macOS'a ayrışık/N
 
 Olay sırası regresyon testleri (gerçek disk gerekmez): `sh test/olay/calistir.sh` servisi sahte DiskArbitration ile
 derleyip çıkar-tak, Finder ⏏, gecikmiş ayırma/bağlama sonucu ve klon UUID senaryolarını sınar.
-`sh test/surum_testi.sh` geri almanın yarıda kalma durumunu sınar.
+Ayrıca bağlama zaman aşımı (SIGTERM → SIGKILL, gerçek hatanın korunması), SIGTERM sonrası geç bağlanma, kapanışta yazma
+hatası (çıkış kodu 0 iken), devralınan bağlantının bağlama noktası ve kullanıcı yokken kilitli aygıtın macOS'a bırakılmaması
+sınanır. `sh test/surum_testi.sh` geri almanın ve güncellemenin yarıda kalma durumunu ve sürüm adı denetimini sınar.
 
 Denenemeyenler (gerçek diskle): aynı adlı iki disk, hazırda bekletmedeki Windows birimi, aynı anda takılı exFAT/APFS diskler.
 

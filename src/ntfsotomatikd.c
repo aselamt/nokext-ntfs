@@ -54,8 +54,10 @@
 #define LOG_MAX     (1024 * 1024)
 #define LOG_KEEP    3
 #define NOTIFY_MAX  (64 * 1024)
+#define MOUNTS_FILE NOTIFY_DIR "/baglar"   /* pid, aygıt, bağlama noktası: yeniden başlayan servis devralırken okur */
 #define MAX_DISKS   32
-#define MOUNT_WAIT  45 /* saniye */
+#define MOUNT_WAIT  45 /* saniye: bu sürede bağlanmazsa SIGTERM */
+#define KILL_WAIT   15 /* saniye: SIGTERM'den sonra hâlâ bağlanmamış ve çalışıyorsa SIGKILL */
 
 extern char **environ;
 
@@ -171,12 +173,12 @@ typedef struct {
     pid_t pid;
     int  out_fd;          /* ntfs-3g stderr okuma ucu */
     int  saw_fallback_ro; /* ntfs-3g "Falling back to read-only" */
-    int  saw_mounted;
     int  io_errors;
+    int  close_err;       /* ntfs-3g birimi kapatırken / eşitlerken hata yazdı (çıkış kodu yine 0 olabilir) */
+    int  timed_out;       /* MOUNT_WAIT doldu, SIGTERM gönderildi */
     char last_err[256];
     dispatch_source_t rd, proc;
-    time_t started;
-    int gone;             /* disk fiziksel olarak çıkarıldı */
+    int gone;            /* disk fiziksel olarak çıkarıldı */
     int pull_notified;    /* 'çıkarılmadan çekildi' bildirimi verildi */
     char obuf[4096];      /* ntfs-3g çıktı satır tamponu */
     size_t oused;
@@ -216,6 +218,62 @@ static disk_t *find_by_gen(void *ctx) {
     for (int i = 0; i < MAX_DISKS; i++) if (g_disks[i].st != ST_FREE && g_disks[i].gen == gen) return &g_disks[i];
     return NULL;
 }
+/* Aygıtı bir süreç (ntfs-3g) kilitlemiş mi? ntfs-3g yazılabilirken F_WRLCK, salt-okunurken F_RDLCK alır;
+ * F_WRLCK sorgusu ikisini de görür. 1: kilitli (*holder = pid), 0: kilitsiz, -1: bilinmiyor. */
+static int lock_holder(int fd, pid_t *holder) {
+    struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
+    if (fcntl(fd, F_GETLK, &fl) != 0) return -1;
+    if (fl.l_type == F_UNLCK) return 0;
+    *holder = fl.l_pid;
+    return 1;
+}
+static int device_locked(const char *bsd, pid_t *holder) {
+    char dev[48]; snprintf(dev, sizeof dev, "/dev/%s", bsd);
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    int r = lock_holder(fd, holder);
+    close(fd);
+    return r;
+}
+
+/* Bağlı ntfs-3g'lerin bağlama noktaları diske yazılır: servis yeniden başlayıp bir ntfs-3g'yi devraldığında
+ * disk çekilirse Finder'daki bağlantıyı kaldırabilmek için. Dosya root:wheel 0644, atomik değiştirilir. */
+static void save_mounts(void) {
+    int fd = open(MOUNTS_FILE ".yeni", O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+    for (int i = 0; i < MAX_DISKS; i++) {
+        const disk_t *d = &g_disks[i];
+        if (d->st == ST_MOUNTED && d->pid > 0 && d->mnt[0]) dprintf(fd, "%d\t%s\t%s\n", (int)d->pid, d->bsd, d->mnt);
+    }
+    close(fd);
+    rename(MOUNTS_FILE ".yeni", MOUNTS_FILE);
+}
+static int load_mount(pid_t pid, const char *bsd, char *out, size_t len) {
+    int fd = open(MOUNTS_FILE, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return 0;
+    char buf[16384];
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        char *t1 = strchr(line, '\t'), *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+        if (t2) {
+            *t1 = 0; *t2 = 0;
+            const char *mnt = t2 + 1;
+            if (atoi(line) == (int)pid && !strcmp(t1 + 1, bsd) && !strncmp(mnt, "/Volumes/", 9) && is_mountpoint(mnt)) {
+                snprintf(out, len, "%s", mnt);
+                return 1;
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    return 0;
+}
+
 /* Geri çağrının diski, kaydın diski mi? (aygıt adı aynı olmalı) */
 static int same_bsd(DADiskRef disk, const disk_t *dk) {
     const char *b = disk ? DADiskGetBSDName(disk) : NULL;
@@ -274,7 +332,9 @@ static const char *explain(const char *line) {
 static void handle_line(disk_t *dk, const char *line) {
     logf_("[%s] ntfs-3g: %s", dk->name, line);
     if (strstr(line, "Falling back to read-only mount")) dk->saw_fallback_ro = 1;
-    if (!strncmp(line, "Mounted ", 8)) dk->saw_mounted = 1;
+    /* ntfs-3g, birimi kapatma (son eşitleme) hatasını yalnızca yazar; çıkış kodu yine 0 olur */
+    if (strstr(line, "Failed to close volume") || strstr(line, "Failed to sync") || strstr(line, "Error writing"))
+        dk->close_err = 1;
     int is_io = strstr(line, "Input/output error") || strstr(line, "Error writing") ||
                 strstr(line, "Failed to sync") || strstr(line, "inconsistent state");
     if (is_io && dk->st == ST_MOUNTED && !dk->gone && !dk->pull_notified && !strstr(line, "Device not configured")) {
@@ -285,6 +345,30 @@ static void handle_line(disk_t *dk, const char *line) {
     if (e) snprintf(dk->last_err, sizeof dk->last_err, "%s", e);
     else if ((strstr(line, "rror") || strstr(line, "ailed")) && !dk->last_err[0])
         snprintf(dk->last_err, sizeof dk->last_err, "%.200s", line);
+}
+
+/* Borudaki ntfs-3g çıktısını okuyabildiği kadar okur (tanıtıcı engellemesiz). Boru kapandıysa (EOF)
+ * yarım kalan son satırı da işler ve 0 döner; okunacak veri bitmiş ama boru açıksa 1 döner. */
+static int read_output(disk_t *dk) {
+    for (;;) {
+        ssize_t n = read(dk->out_fd, dk->obuf + dk->oused, sizeof dk->obuf - 1 - dk->oused);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && errno == EAGAIN) return 1;
+        if (n <= 0) {
+            if (dk->oused) { dk->obuf[dk->oused] = 0; handle_line(dk, dk->obuf); dk->oused = 0; }
+            return 0;
+        }
+        dk->oused += (size_t)n; dk->obuf[dk->oused] = 0;
+        char *start = dk->obuf, *nl;
+        while ((nl = strchr(start, '\n'))) { *nl = 0; if (*start) handle_line(dk, start); start = nl + 1; }
+        dk->oused = strlen(start); memmove(dk->obuf, start, dk->oused + 1);
+        if (dk->oused >= sizeof dk->obuf - 1) { handle_line(dk, dk->obuf); dk->oused = 0; }
+    }
+}
+/* Okumayı bitirir: okuma kaynağı iptal edilir (iptal işleyicisi boruyu kapatır). */
+static void stop_output(disk_t *dk) {
+    if (dk->rd) { dispatch_source_cancel(dk->rd); dispatch_release(dk->rd); dk->rd = NULL; }
+    dk->out_fd = -1;
 }
 
 /* ---------- macOS'un kendi salt-okunur bağlaması (yedek yol) ---------- */
@@ -314,11 +398,22 @@ static void native_mount_cb(DADiskRef disk, DADissenterRef dis, void *ctx) {
     }
 }
 
+static void adopt(disk_t *dk, pid_t pid);
+
 static void fallback_native(disk_t *dk) {
     DADiskRef disk = DADiskCreateFromBSDName(kCFAllocatorDefault, g_session, dk->bsd);
     if (!disk) { dk->st = ST_FAILED; notify_user("“%s” bağlanamadı ve disk artık görünmüyor.", dk->name); return; }
     info_t in; disk_info(disk, &in);
     if (!in.ok || strcmp(in.key, dk->key)) { CFRelease(disk); dk->st = ST_FAILED; logf_("[%s] yedek bağlama iptal: disk değişmiş", dk->name); return; }
+    /* Aygıtı bir ntfs-3g tutuyorsa (ör. önceki servisin başlattığı) macOS'a bağlatmak çift bağlama olur. */
+    pid_t holder = 0;
+    if (device_locked(dk->bsd, &holder) == 1) {
+        CFRelease(disk);
+        logf_("[%s] yedek bağlama yapılmadı: aygıt kilitli (pid %d)", dk->name, (int)holder);
+        dk->mnt[0] = 0;
+        adopt(dk, holder);
+        return;
+    }
     dk->st = ST_NATIVE; /* onay geri çağrısı bu duruma izin verir */
     logf_("[%s] macOS salt-okunur bağlama deneniyor (%s)", dk->name, dk->bsd);
     DADiskMount(disk, NULL, kDADiskMountOptionDefault, native_mount_cb, gen_ctx(dk));
@@ -337,8 +432,10 @@ static void child_exited(disk_t *dk) {
         code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
         logf_("[%s] ntfs-3g bitti, çıkış kodu %d (durum %d)", dk->name, code, (int)dk->st);
     }
-    if (dk->rd) { dispatch_source_cancel(dk->rd); dk->rd = NULL; }
-    if (dk->proc) { dispatch_source_cancel(dk->proc); dk->proc = NULL; }
+    /* Süreç bitişi, borudaki son satırlardan önce gelebilir: önce kalan çıktı okunur, karar sonra verilir. */
+    if (dk->out_fd >= 0) read_output(dk);
+    stop_output(dk);
+    if (dk->proc) { dispatch_source_cancel(dk->proc); dispatch_release(dk->proc); dk->proc = NULL; }
     dk->pid = -1;
     if (dk->mnt[0] && !is_mountpoint(dk->mnt)) rmdir(dk->mnt);
 
@@ -357,6 +454,9 @@ static void child_exited(disk_t *dk) {
             /* çıkış kodu bilinmez; disk hâlâ takılı olduğuna göre büyük olasılıkla Finder'dan çıkarıldı */
             dk->st = ST_EJECTED;
             logf_("[%s] çıkarıldı (devralınan bağlantı; ntfs-3g çıkış kodu bilinmiyor)", dk->name);
+        } else if (dk->close_err) {
+            dk->st = ST_EJECTED;
+            notify_user("“%s” ayrılırken diske yazma hatası oldu; son değişiklikler kaydedilmemiş olabilir. Windows'ta chkdsk ile kontrol et. Ayrıntı: " LOG_FILE, dk->name);
         } else if (code == 0 && dk->io_errors == 0) {
             dk->st = ST_EJECTED; /* çıkarıldı: fiziksel çıkar-tak olana kadar yeniden bağlanmaz */
             logf_("[%s] düzgün çıkarıldı", dk->name);
@@ -367,6 +467,7 @@ static void child_exited(disk_t *dk) {
         }
     }
     if (dk->gone) free_disk(dk);
+    save_mounts();
 }
 
 /* Servis yeniden başladıysa (ör. 'servis.sh kapat' bağlı disk görüp servisi geri açtığında, güncellemede
@@ -385,6 +486,10 @@ static void adopt(disk_t *dk, pid_t pid) {
     }
     dk->pid = pid; dk->adopted = 1;
     logf_("[%s] aygıtı önceki servisin başlattığı ntfs-3g tutuyor (pid %d); dokunulmadı, bitişi izleniyor", dk->name, (int)pid);
+    /* bağlama noktası, disk çekilirse Finder'daki bağlantıyı kaldırabilmek için gerekir */
+    if (load_mount(pid, dk->bsd, dk->mnt, sizeof dk->mnt)) logf_("[%s] devralınan bağlama noktası: %s", dk->name, dk->mnt);
+    else { dk->mnt[0] = 0; logf_("[%s] devralınan ntfs-3g'nin bağlama noktası bilinmiyor", dk->name); }
+    save_mounts();
     /* süreç bu arada bittiyse libdispatch bitişi hemen bildirir (ESRCH -> NOTE_EXIT) */
     unsigned gen = dk->gen;
     dispatch_source_set_event_handler(dk->proc, ^{
@@ -434,104 +539,134 @@ static void start_mount(DADiskRef disk, disk_t *dk, const info_t *in) {
         return;
     }
 
+    /* Aygıt, bağlama noktası oluşturulmadan ÖNCE açılır ve kilidine bakılır: önceki servisin ntfs-3g'si
+     * tutuyorsa ona dokunulmaz (devralınır). */
+    char dev[48]; snprintf(dev, sizeof dev, "/dev/%s", dk->bsd);
+    struct stat st;
+    if (lstat(dev, &st) != 0 || !S_ISBLK(st.st_mode)) { logf_("[%s] %s blok aygıtı değil", dk->name, dev); dk->st = ST_FAILED; return; }
+    int fd = open(dev, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        snprintf(dk->last_err, sizeof dk->last_err, "%s", errno == EPERM ? "macOS izin vermedi (Tam Disk Erişimi izni kapalı olabilir)" : strerror(errno));
+        logf_("[%s] %s açılamadı: %s", dk->name, dev, strerror(errno));
+        dk->st = ST_MOUNTING; fallback_native(dk); return;
+    }
+    pid_t holder = 0;
+    if (lock_holder(fd, &holder) == 1) {
+        close(fd); dk->mnt[0] = 0;
+        adopt(dk, holder);
+        return;
+    }
+
     /* bağlama noktası: /Volumes/<ad>[ n] */
     char base[PATH_MAX];
     snprintf(base, sizeof base, "/Volumes/%s", dk->name);
     snprintf(dk->mnt, sizeof dk->mnt, "%s", base);
     for (int n = 2; n < 100; n++) {
-        struct stat st;
         if (lstat(dk->mnt, &st) != 0) break;
         snprintf(dk->mnt, sizeof dk->mnt, "%s %d", base, n);
     }
-    if (mkdir(dk->mnt, 0755) != 0) { logf_("[%s] bağlama noktası oluşturulamadı: %s", dk->name, strerror(errno)); dk->st = ST_FAILED; return; }
-    if (chown(dk->mnt, uid, gid) != 0) { rmdir(dk->mnt); dk->st = ST_FAILED; return; }
+    if (mkdir(dk->mnt, 0755) != 0) { logf_("[%s] bağlama noktası oluşturulamadı: %s", dk->name, strerror(errno)); close(fd); dk->mnt[0] = 0; dk->st = ST_FAILED; return; }
+    if (chown(dk->mnt, uid, gid) != 0) { close(fd); rmdir(dk->mnt); dk->mnt[0] = 0; dk->st = ST_FAILED; return; }
 
-    char dev[48]; snprintf(dev, sizeof dev, "/dev/%s", dk->bsd);
-    struct stat st;
-    if (lstat(dev, &st) != 0 || !S_ISBLK(st.st_mode)) { rmdir(dk->mnt); dk->st = ST_FAILED; return; }
-    int fd = open(dev, O_RDWR | O_CLOEXEC);
-    if (fd < 0) {
-        snprintf(dk->last_err, sizeof dk->last_err, "%s", errno == EPERM ? "macOS izin vermedi (Tam Disk Erişimi izni kapalı olabilir)" : strerror(errno));
-        logf_("[%s] %s açılamadı: %s", dk->name, dev, strerror(errno));
-        rmdir(dk->mnt); dk->st = ST_MOUNTING; fallback_native(dk); return;
-    }
-    struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
-    if (fcntl(fd, F_GETLK, &fl) == 0 && fl.l_type != F_UNLCK) {
-        close(fd); rmdir(dk->mnt); dk->mnt[0] = 0;   /* bu yeni boş klasördü; asıl bağlama noktası değil */
-        adopt(dk, fl.l_pid);
-        return;
-    }
     int pfd[2];
-    if (pipe(pfd) != 0) { close(fd); rmdir(dk->mnt); dk->st = ST_FAILED; return; }
+    if (pipe(pfd) != 0) { close(fd); rmdir(dk->mnt); dk->mnt[0] = 0; dk->st = ST_FAILED; return; }
+    fcntl(pfd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pfd[1], F_SETFD, FD_CLOEXEC);   /* alt süreçte dup2 ile 1/2'ye kopyalanır; kopyalar CLOEXEC değildir */
 
-    /* seçenekler: volname temizlenmiş addan (virgül/eşittir yok) */
+    /* Alt süreçte fork sonrası yalnızca async-signal-safe çağrılar yapılır (servis çok iş parçacıklı):
+     * kullanıcı grupları, ortam ve argümanlar ana süreçte hazırlanır. */
     char opts[512];
     snprintf(opts, sizeof opts,
              "no_detach,norecover,backend=fskit,local,volname=%s,umask=022,streams_interface=openxattr", dk->name);
+    gid_t groups[NGROUPS_MAX];
+    int ngroups = NGROUPS_MAX;
+    if (getgrouplist(pw->pw_name, (int)gid, (int *)groups, &ngroups) < 0 || ngroups > NGROUPS_MAX) ngroups = NGROUPS_MAX;
+    if (ngroups < 1) { groups[0] = gid; ngroups = 1; }
+    char home[PATH_MAX + 8], user[300], logname[300];
+    snprintf(home, sizeof home, "HOME=%s", pw->pw_dir);
+    snprintf(user, sizeof user, "USER=%s", pw->pw_name);
+    snprintf(logname, sizeof logname, "LOGNAME=%s", pw->pw_name);
+    char *env[] = { "PATH=/usr/bin:/bin:/usr/sbin:/sbin", home, user, logname, NULL };
+    char *args[] = { NTFS3G, "/dev/fd/3", dk->mnt, "-o", opts, NULL };
+    /* Servis SIGTERM'i yok sayar (dispatch kaynağıyla yakalar); yok sayılan sinyaller execve'den sonra da yok
+     * sayılı kalır ve libfuse yalnızca varsayılan durumdaki sinyallere işleyici kurar. Alt süreçte hepsi
+     * varsayılana döndürülür; yoksa ntfs-3g SIGTERM ile durdurulamaz, kapanışta düzgün ayrılamaz. */
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof dfl);
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigset_t nomask;
+    sigemptyset(&nomask);
 
     pid_t pid = fork();
-    if (pid < 0) { close(fd); close(pfd[0]); close(pfd[1]); rmdir(dk->mnt); dk->st = ST_FAILED; return; }
+    if (pid < 0) { close(fd); close(pfd[0]); close(pfd[1]); rmdir(dk->mnt); dk->mnt[0] = 0; dk->st = ST_FAILED; return; }
     if (pid == 0) {
         /* alt süreç: fd 3 = aygıt, 1/2 = boru; yetki kullanıcıya düşer */
+        for (int s = 1; s < NSIG; s++) if (s != SIGKILL && s != SIGSTOP) sigaction(s, &dfl, NULL);
+        sigprocmask(SIG_SETMASK, &nomask, NULL);
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0) dup2(devnull, 0);
-        dup2(pfd[1], 1); dup2(pfd[1], 2);
-        if (fd != 3) { dup2(fd, 3); }
-        fcntl(3, F_SETFD, 0);
+        if (dup2(pfd[1], 1) < 0 || dup2(pfd[1], 2) < 0) _exit(70);
+        if (fd != 3 && dup2(fd, 3) < 0) _exit(70);
+        if (fcntl(3, F_SETFD, 0) != 0) _exit(70);
         for (int i = 4; i < 1024; i++) close(i);
-        if (initgroups(pw->pw_name, (int)gid) != 0 || setgid(gid) != 0 || setuid(uid) != 0) _exit(71);
+        if (setgroups(ngroups, groups) != 0 || setgid(gid) != 0 || setuid(uid) != 0) _exit(71);
         if (setuid(0) == 0 || geteuid() == 0) _exit(72);
-        char home[PATH_MAX + 8], user[300], logname[300];
-        snprintf(home, sizeof home, "HOME=%s", pw->pw_dir);
-        snprintf(user, sizeof user, "USER=%s", pw->pw_name);
-        snprintf(logname, sizeof logname, "LOGNAME=%s", pw->pw_name);
-        char *env[] = { "PATH=/usr/bin:/bin:/usr/sbin:/sbin", home, user, logname, NULL };
-        char *args[] = { NTFS3G, "/dev/fd/3", dk->mnt, "-o", opts, NULL };
         execve(NTFS3G, args, env);
         _exit(73);
     }
     close(fd); close(pfd[1]);
-    dk->pid = pid; dk->out_fd = pfd[0]; dk->st = ST_MOUNTING; dk->started = time(NULL);
+    fcntl(pfd[0], F_SETFL, fcntl(pfd[0], F_GETFL) | O_NONBLOCK);   /* çıkışta boru boşaltılırken bloklanmasın */
+    dk->pid = pid; dk->out_fd = pfd[0]; dk->st = ST_MOUNTING;
     logf_("[%s] ntfs-3g başlatıldı: %s -> %s, kullanıcı %s (pid %d)", dk->name, dev, dk->mnt, uname, (int)pid);
 
     /* stderr satırlarını oku */
     dk->rd = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)dk->out_fd, 0, dispatch_get_main_queue());
     dk->oused = 0;
+    unsigned gen = dk->gen;
     dispatch_source_set_event_handler(dk->rd, ^{
-        ssize_t n = read(dk->out_fd, dk->obuf + dk->oused, sizeof dk->obuf - 1 - dk->oused);
-        if (n <= 0) { dispatch_source_cancel(dk->rd); return; }
-        dk->oused += (size_t)n; dk->obuf[dk->oused] = 0;
-        char *start = dk->obuf, *nl;
-        while ((nl = strchr(start, '\n'))) { *nl = 0; if (*start) handle_line(dk, start); start = nl + 1; }
-        dk->oused = strlen(start); memmove(dk->obuf, start, dk->oused + 1);
-        if (dk->oused >= sizeof dk->obuf - 1) { handle_line(dk, dk->obuf); dk->oused = 0; }
+        if (dk->gen != gen || dk->out_fd < 0) return;
+        if (!read_output(dk)) stop_output(dk);
     });
     int rfd = dk->out_fd;
     dispatch_source_set_cancel_handler(dk->rd, ^{ close(rfd); });
     dispatch_resume(dk->rd);
 
     dk->proc = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid, DISPATCH_PROC_EXIT, dispatch_get_main_queue());
-    dispatch_source_set_event_handler(dk->proc, ^{ child_exited(dk); });
+    dispatch_source_set_event_handler(dk->proc, ^{ if (dk->gen == gen && dk->pid == pid) child_exited(dk); });
     dispatch_resume(dk->proc);
 
     /* bağlandı mı? sınırlı süre bekle (yalnızca bu bağlama için, yoklama döngüsü değil) */
-    unsigned gen = dk->gen;
     for (int i = 1; i <= MOUNT_WAIT; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)i * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            if (dk->gen != gen || dk->st != ST_MOUNTING || dk->pid != pid) return;
+            if (dk->gen != gen || dk->st != ST_MOUNTING || dk->pid != pid || dk->timed_out) return;
             if (is_mountpoint(dk->mnt)) {
                 dk->st = ST_MOUNTED;
+                save_mounts();
                 if (dk->saw_fallback_ro)
                     notify_user("“%s” salt-okunur bağlandı: Windows'ta tam kapatılmamış ya da hazırda bekletmede. Diski Windows'ta tamamen kapatıp (Hızlı Başlatma kapalı) tekrar tak.", dk->name);
                 else
                     notify_user("“%s” yazılabilir olarak bağlandı. İşin bitince Finder'dan çıkar.", dk->name);
             } else if (i == MOUNT_WAIT) {
                 logf_("[%s] %d sn içinde bağlanmadı; ntfs-3g durduruluyor", dk->name, MOUNT_WAIT);
-                snprintf(dk->last_err, sizeof dk->last_err, "zaman aşımı");
+                /* ntfs-3g'nin yazdığı gerçek hata korunur; yalnızca ek bilgi olarak süre yazılır */
+                char e[sizeof dk->last_err];
+                if (dk->last_err[0]) snprintf(e, sizeof e, "%.200s; %d sn içinde bağlanamadı", dk->last_err, MOUNT_WAIT);
+                else snprintf(e, sizeof e, "zaman aşımı: %d sn içinde bağlanamadı", MOUNT_WAIT);
+                snprintf(dk->last_err, sizeof dk->last_err, "%s", e);
+                dk->timed_out = 1;
                 kill(pid, SIGTERM); /* ntfs-3g henüz bağlamadı; normal sonlandırma */
             }
         });
     }
+    /* SIGTERM'den sonra da bitmediyse ve hâlâ bağlı değilse zorla durdurulur. Bağlandıysa öldürülmez:
+     * SIGTERM işleyicisi birimi kendisi düzgün ayırır. */
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(MOUNT_WAIT + KILL_WAIT) * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (dk->gen != gen || dk->pid != pid || !dk->timed_out || dk->st != ST_MOUNTING) return;
+        if (is_mountpoint(dk->mnt)) { logf_("[%s] ntfs-3g geç bağlandı; SIGTERM ile kendisi ayrılacak, zorla durdurulmadı", dk->name); return; }
+        logf_("[%s] ntfs-3g SIGTERM'den %d sn sonra da bitmedi; SIGKILL gönderiliyor", dk->name, KILL_WAIT);
+        kill(pid, SIGKILL);
+    });
 }
 
 /* ---------- DiskArbitration geri çağrıları ---------- */
@@ -553,8 +688,13 @@ static DADissenterRef mount_approval(DADiskRef disk, void *ctx) {
     info_t in; disk_info(disk, &in);
     if (!in.ok) return NULL; /* NTFS değil / dahili: macOS normal davranır */
     disk_t *dk = find_disk(in.key, in.bsd);
-    if (dk && dk->st == ST_NATIVE) return NULL; /* yedek salt-okunur bağlamaya izin */
-    if (dk && dk->st == ST_FAILED) return NULL;
+    if (dk && (dk->st == ST_NATIVE || dk->st == ST_FAILED)) {
+        /* yedek salt-okunur bağlamaya izin; ama aygıtı bir ntfs-3g tutuyorsa asla (çift bağlama) */
+        pid_t holder = 0;
+        if (device_locked(in.bsd, &holder) != 1) return NULL;
+        logf_("[%s] macOS'un bağlama isteği reddedildi: aygıtı pid %d kilitlemiş (%s)", in.name, (int)holder, in.bsd);
+        return DADissenterCreate(kCFAllocatorDefault, kDAReturnBusy, CFSTR("NoKext NTFS"));
+    }
     logf_("[%s] macOS'un bağlama isteği reddedildi (%s)", in.name, in.bsd);
     if (!dk) {
         /* ilk kez görülüyor: biz bağlayacağız */

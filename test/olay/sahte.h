@@ -129,6 +129,7 @@ void dispatch_source_set_event_handler(dispatch_source_t, dispatch_block_t);
 void dispatch_source_set_cancel_handler(dispatch_source_t, dispatch_block_t);
 void dispatch_resume(dispatch_source_t);
 void dispatch_source_cancel(dispatch_source_t);
+void dispatch_release(dispatch_source_t);
 
 /* ---------- sistem çağrıları ---------- */
 #ifndef __APPLE__
@@ -149,6 +150,7 @@ int sahte_kill(pid_t, int);
 int sahte_unmount(const char *, int);
 int sahte_fcntl(int, int, ...);
 struct passwd *sahte_getpwnam(const char *);
+int sahte_pipe(int *);
 #define open(...)      sahte_open(__VA_ARGS__)
 #define stat(p, s)     sahte_stat(p, s)
 #define lstat(p, s)    sahte_lstat(p, s)
@@ -164,6 +166,7 @@ struct passwd *sahte_getpwnam(const char *);
 #define unmount(p, f)  sahte_unmount(p, f)
 #define fcntl(...)     sahte_fcntl(__VA_ARGS__)
 #define getpwnam(n)    sahte_getpwnam(n)
+#define pipe(p)        sahte_pipe(p)
 #define main           ntfsotomatikd_main
 
 /* ---------- testin dünyayı yönetmesi için ---------- */
@@ -197,6 +200,13 @@ pid_t sahte_ntfs3g_onceki_servis(const char *bsd); /* önceki servisin başlatt�
                                                       (bu servisin çocuğu değil: waitpid ECHILD döner) */
 int sahte_waitpid_yabanci(void);                   /* çocuk olmayan sürece kaç kez waitpid çağrıldı */
 int sahte_gunluk_var(const char *parca);           /* servis günlüğünde bu metin geçiyor mu */
+void sahte_ntfs3g_yaz(pid_t, const char *metin);   /* ntfs-3g stderr'ine yaz (okuma olayı tetiklenmez) */
+void sahte_okuma_tetikle(void);                    /* boru okuma kaynaklarının olayını çalıştır */
+int sahte_dosya_var(const char *ad, const char *parca); /* servis klasöründeki dosyada metin var mı */
+int sahte_son_sinyal(pid_t);                       /* bu sürece gönderilen son sinyal (0 = yok) */
+int sahte_unmount_sayisi(const char *yol);         /* bu yol için unmount kaç kez çağrıldı */
+void sahte_konsol_yok(int yok);                    /* giriş yapmış kullanıcı yokmuş gibi */
+void sahte_dosya_yaz(const char *ad, const char *metin); /* servis klasörüne dosya (ör. baglar) */
 
 void sahte_kuyrugu_calistir(void);                 /* dispatch_async kuyruğunu boşalt */
 void sahte_saniye_ilerlet(int sn);                 /* dispatch_after zamanlayıcılarını çalıştır */

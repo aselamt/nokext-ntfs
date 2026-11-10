@@ -3,16 +3,17 @@
 # NoKext NTFS'yi kaldırır: yalnızca bu kurulumun eklediği parçalar silinir.
 # Kullanım: sudo kaldir.sh            (servis + NoKext NTFS dosyaları)
 #           sudo kaldir.sh --macfuse  (ek olarak macFUSE'u kendi resmi kaldırıcısıyla kaldırır)
+set -eu
 . "$(dirname "$0")/ortak.sh"
 root_gerek
-bakim_baslat   # servis durur; bağlı / bağlanmakta olan disk varsa servis geri açılır ve hiçbir şey silinmez
+bakim_baslat   # bağlı / bağlanmakta olan disk varsa servise dokunulmaz ve hiçbir şey silinmez
 U=$(konsol_uid)
 launchctl bootout gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
 rm -f "$DAEMON_PLIST" "$AGENT_PLIST"
 rm -rf /Library/Logs/NTFSOtomatik
 if [ "${1:-}" = "--macfuse" ]; then
   K=/Library/Filesystems/macfuse.fs/Contents/Resources/uninstall_macfuse.app/Contents/Resources/Scripts/uninstall_macfuse.sh
-  [ -x "$K" ] && /bin/bash "$K" && echo "macFUSE kaldırıldı."
+  if [ -x "$K" ]; then /bin/bash "$K" && echo "macFUSE kaldırıldı."; else echo "macFUSE kaldırıcısı bulunamadı; atlandı."; fi
 fi
 rm -rf "$N"
 echo "NoKext NTFS kaldırıldı."
