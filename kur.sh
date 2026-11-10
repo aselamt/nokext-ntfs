@@ -39,7 +39,7 @@ bakim_baslat
 echo "==> dosyalar doğrulanıyor"
 (cd "$DIST" && shasum -a 256 -c SHA256SUMS >/dev/null) || { echo "dist/ içindeki dosyalar değişmiş; yeniden derleyin."; exit 1; }
 VER=$(cat "$DIST/SURUM")
-echo "$VER" | grep -Eq '^[0-9A-Za-z.-]{1,40}$' || { echo "Geçersiz sürüm adı"; exit 1; }
+gecerli_surum "$VER" || { echo "Geçersiz sürüm adı"; exit 1; }
 
 umask 022
 mkdir -p "$N/bin" "$N/betikler" "$N/durum" "$N/surumler" /Library/Logs/NTFSOtomatik

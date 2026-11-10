@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Kullanım: sudo servis.sh ac | kapat
+set -eu
 . "$(dirname "$0")/ortak.sh"
 root_gerek
 U=$(konsol_uid)
@@ -12,7 +13,7 @@ case "${1:-}" in
     launchctl kickstart gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
     echo "Servis açıldı. Takılan NTFS diskler yazılabilir bağlanacak." ;;
   kapat)
-    bakim_baslat       # önce servis durur, sonra denetlenir; bağlı disk varsa servis geri açılır
+    bakim_baslat       # bağlı disk varsa servis hiç durdurulmaz; durdurulduktan sonra da yeniden denetlenir
     SERVIS_ACIKTI=0    # başarıyla kapatıldı: çıkışta yeniden başlatılmasın
     launchctl bootout gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
     echo "Servis kapatıldı. NTFS diskler macOS'un kendi salt-okunur desteğiyle açılır."

@@ -17,7 +17,8 @@ NTFS3G_VER=2026.9.28
 NTFS3G_URL="https://tuxera.com/opensource/ntfs-3g_ntfsprogs-${NTFS3G_VER}.tgz"
 NTFS3G_SHA256=350d9415c59f7c3fa74e23985ad2d56423c6a168337368f672e2e362d8f295c8
 VER="${1:-${NTFS3G_VER}-1}"
-echo "$VER" | grep -Eq '^[0-9A-Za-z.-]{1,40}$' || { echo "Geçersiz sürüm adı: $VER"; exit 1; }
+case "$VER" in ''|.|..|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]*) echo "Geçersiz sürüm adı: $VER"; exit 1 ;; esac
+[ "${#VER}" -le 40 ] || { echo "Geçersiz sürüm adı: $VER"; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$HERE/build"; DIST="$HERE/dist"

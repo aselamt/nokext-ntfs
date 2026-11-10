@@ -25,6 +25,15 @@ bagliysa_dur() {
 }
 konsol_uid() { stat -f %u /dev/console; }
 
+# Sürüm adı: yalnızca harf, rakam, nokta, tire; 1-40 karakter; tek satır; "." ve ".." değil.
+# (grep satır satır eşleştirdiği için çok satırlı bir değeri kabul ederdi; case tüm dizgeye bakar.)
+gecerli_surum() {
+  case "$1" in
+    ''|.|..|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 40 ]
+}
+
 # ---- bakım kilidi ----
 # bagliysa_dur tek başına yalnızca o anı denetler: servis çalışmaya devam ederse kontrolden hemen sonra
 # takılan bir disk bağlanabilir. Bakım yapan betikler bu yüzden önce servisi durdurur (yeni bağlama
@@ -39,6 +48,10 @@ bakim_bitir() {
   fi
 }
 bakim_baslat() {
+  # Önce, servis daha ÇALIŞIRKEN bakılır: bağlı disk varken servis hiç durdurulmaz. Servis dururken
+  # macOS'un kendi bağlama isteklerini reddeden kimse olmaz (aynı bölüme iki sürücü). Servis durduktan
+  # sonraki ikinci denetim, bu arada başlamış bir bağlamayı yakalar.
+  bagliysa_dur
   launchctl print "$SERVIS" >/dev/null 2>&1 && SERVIS_ACIKTI=1
   trap bakim_bitir EXIT
   trap 'exit 130' HUP INT TERM
