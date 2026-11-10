@@ -181,6 +181,7 @@ typedef struct {
     char obuf[4096];      /* ntfs-3g çıktı satır tamponu */
     size_t oused;
     unsigned gen;         /* takma oturumu numarası (0 = yok); yuva her ayrıldığında yenisi verilir */
+    int adopted;          /* ntfs-3g'yi önceki servis başlattı: çocuğumuz değil, çıktısı ve çıkış kodu bilinmez */
 } disk_t;
 
 static disk_t g_disks[MAX_DISKS];
@@ -327,10 +328,15 @@ static void fallback_native(disk_t *dk) {
 /* ---------- ntfs-3g bitince ---------- */
 
 static void child_exited(disk_t *dk) {
-    int status = 0;
-    waitpid(dk->pid, &status, 0);
-    int code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-    logf_("[%s] ntfs-3g bitti, çıkış kodu %d (durum %d)", dk->name, code, (int)dk->st);
+    int code = -1;
+    if (dk->adopted) {
+        logf_("[%s] devralınan ntfs-3g bitti (pid %d, durum %d)", dk->name, (int)dk->pid, (int)dk->st);
+    } else {
+        int status = 0;
+        waitpid(dk->pid, &status, 0);
+        code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+        logf_("[%s] ntfs-3g bitti, çıkış kodu %d (durum %d)", dk->name, code, (int)dk->st);
+    }
     if (dk->rd) { dispatch_source_cancel(dk->rd); dk->rd = NULL; }
     if (dk->proc) { dispatch_source_cancel(dk->proc); dk->proc = NULL; }
     dk->pid = -1;
@@ -347,6 +353,10 @@ static void child_exited(disk_t *dk) {
             if (!dk->pull_notified)
                 notify_user("“%s” Finder'dan çıkarılmadan çekildi. Açık dosyalar kaydedilmemiş olabilir; diski yeniden takmadan önce Windows'ta chkdsk ile kontrol et.", dk->name);
             logf_("[%s] disk çekildiği için ntfs-3g kapandı", dk->name);
+        } else if (dk->adopted) {
+            /* çıkış kodu bilinmez; disk hâlâ takılı olduğuna göre büyük olasılıkla Finder'dan çıkarıldı */
+            dk->st = ST_EJECTED;
+            logf_("[%s] çıkarıldı (devralınan bağlantı; ntfs-3g çıkış kodu bilinmiyor)", dk->name);
         } else if (code == 0 && dk->io_errors == 0) {
             dk->st = ST_EJECTED; /* çıkarıldı: fiziksel çıkar-tak olana kadar yeniden bağlanmaz */
             logf_("[%s] düzgün çıkarıldı", dk->name);
@@ -357,6 +367,31 @@ static void child_exited(disk_t *dk) {
         }
     }
     if (dk->gone) free_disk(dk);
+}
+
+/* Servis yeniden başladıysa (ör. 'servis.sh kapat' bağlı disk görüp servisi geri açtığında, güncellemede
+ * ya da çökme sonrası) disk önceki servisin başlattığı ntfs-3g ile bağlı kalır. Ona dokunulmaz; yalnızca
+ * bitişi izlenir ki çıkarma/çekme günlüğe yazılsın ve disk 'çıkarıldı' durumuna geçsin. */
+static void adopt(disk_t *dk, pid_t pid) {
+    dk->st = ST_MOUNTED; dk->pid = -1;
+    if (pid <= 0) {
+        logf_("[%s] aygıt başka bir süreç tarafından kullanılıyor; dokunulmadı", dk->name);
+        return;
+    }
+    dk->proc = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid, DISPATCH_PROC_EXIT, dispatch_get_main_queue());
+    if (!dk->proc) {
+        logf_("[%s] aygıt zaten başka bir ntfs-3g tarafından kullanılıyor (pid %d); dokunulmadı", dk->name, (int)pid);
+        return;
+    }
+    dk->pid = pid; dk->adopted = 1;
+    logf_("[%s] aygıtı önceki servisin başlattığı ntfs-3g tutuyor (pid %d); dokunulmadı, bitişi izleniyor", dk->name, (int)pid);
+    /* süreç bu arada bittiyse libdispatch bitişi hemen bildirir (ESRCH -> NOTE_EXIT) */
+    unsigned gen = dk->gen;
+    dispatch_source_set_event_handler(dk->proc, ^{
+        disk_t *d = find_by_gen((void *)(uintptr_t)gen);
+        if (d && d->adopted && d->pid == pid) child_exited(d);
+    });
+    dispatch_resume(dk->proc);
 }
 
 /* ---------- yazılabilir bağlama ---------- */
@@ -422,8 +457,9 @@ static void start_mount(DADiskRef disk, disk_t *dk, const info_t *in) {
     }
     struct flock fl = { .l_type = F_WRLCK, .l_whence = SEEK_SET };
     if (fcntl(fd, F_GETLK, &fl) == 0 && fl.l_type != F_UNLCK) {
-        logf_("[%s] aygıt zaten başka bir ntfs-3g tarafından kullanılıyor (pid %d); dokunulmadı", dk->name, (int)fl.l_pid);
-        close(fd); rmdir(dk->mnt); dk->st = ST_MOUNTED; dk->pid = -1; return;
+        close(fd); rmdir(dk->mnt); dk->mnt[0] = 0;   /* bu yeni boş klasördü; asıl bağlama noktası değil */
+        adopt(dk, fl.l_pid);
+        return;
     }
     int pfd[2];
     if (pipe(pfd) != 0) { close(fd); rmdir(dk->mnt); dk->st = ST_FAILED; return; }

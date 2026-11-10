@@ -193,6 +193,10 @@ int sahte_ntfs3g_sayisi(void);
 pid_t sahte_ntfs3g_pid(const char *bsd);           /* bu aygıt için çalışan sahte ntfs-3g; yoksa -1 */
 void sahte_ntfs3g_baglandi(pid_t);                 /* bağlama noktası artık bağlı (statfs) */
 void sahte_ntfs3g_bitti(pid_t, int kod);           /* süreç bitti: PROC kaynağı tetiklenir */
+pid_t sahte_ntfs3g_onceki_servis(const char *bsd); /* önceki servisin başlattığı, aygıtı kilitlemiş bağlı ntfs-3g
+                                                      (bu servisin çocuğu değil: waitpid ECHILD döner) */
+int sahte_waitpid_yabanci(void);                   /* çocuk olmayan sürece kaç kez waitpid çağrıldı */
+int sahte_gunluk_var(const char *parca);           /* servis günlüğünde bu metin geçiyor mu */
 
 void sahte_kuyrugu_calistir(void);                 /* dispatch_async kuyruğunu boşalt */
 void sahte_saniye_ilerlet(int sn);                 /* dispatch_after zamanlayıcılarını çalıştır */

@@ -150,6 +150,40 @@ static void macos_baglantisi_devralma(void) {
     BEKLE(sahte_ntfs3g_sayisi() == 1, "ayrıldıktan sonra ntfs-3g başlamadı");
 }
 
+/* Servis yeniden başladı (ör. 'servis.sh kapat' bağlı disk görüp geri açtı); disk önceki servisin
+ * ntfs-3g'si ile bağlı. Yeni servis ona dokunmamalı ama bitişini izlemeli. */
+static void onceki_servisin_ntfs3g(int cekilir) {
+    basla(cekilir ? "önceki servisin ntfs-3g'si: disk çıkarılmadan çekilir"
+                  : "önceki servisin ntfs-3g'si: Finder'dan çıkarma");
+    sahte_disk_tak("disk4s2", "66666666-6666-6666-6666-666666666666", "ESKISERVIS", 0);
+    pid_t eski = sahte_ntfs3g_onceki_servis("disk4s2");
+    disk_appeared(sahte_disk_ref("disk4s2"), NULL);   /* yeni servis açılışta diski görür */
+    BEKLE(sahte_ntfs3g_sayisi() == 1, "bağlı disk için ikinci ntfs-3g başladı (%d çalışıyor)", sahte_ntfs3g_sayisi());
+    BEKLE(sahte_gunluk_var("bitişi izleniyor"), "devralınan ntfs-3g izlenmiyor");
+    BEKLE(macos_reddedildi("disk4s2"), "devralınan disk için macOS bağlamasına izin verildi (çift bağlama)");
+
+    if (cekilir) {
+        sahte_disk_cek("disk4s2");
+        disk_disappeared(sahte_disk_ref_eski("disk4s2"), NULL);
+        BEKLE(sahte_bildirim_var("“ESKISERVIS” Finder'dan çıkarılmadan çekildi"), "çekme bildirilmedi");
+        sahte_ntfs3g_bitti(eski, 1);
+        BEKLE(sahte_gunluk_var("devralınan ntfs-3g bitti"), "devralınan ntfs-3g'nin bitişi günlüğe yazılmadı");
+        sahte_disk_tak("disk4s2", "66666666-6666-6666-6666-666666666666", "ESKISERVIS", 0);
+        disk_appeared(sahte_disk_ref("disk4s2"), NULL);
+        pid_t yeni = sahte_ntfs3g_pid("disk4s2");
+        BEKLE(yeni > 0 && yeni != eski, "yeniden takılan disk bağlanmadı");
+    } else {
+        sahte_ntfs3g_bitti(eski, 0);   /* Finder ⏏ */
+        BEKLE(sahte_gunluk_var("devralınan ntfs-3g bitti"), "devralınan ntfs-3g'nin bitişi günlüğe yazılmadı");
+        BEKLE(sahte_gunluk_var("çıkarıldı (devralınan bağlantı"), "çıkarma günlüğe yazılmadı");
+        BEKLE(!sahte_bildirim_var("beklenmedik") && !sahte_bildirim_var("çekildi"), "Finder'dan çıkarma hata gibi bildirildi");
+        disk_changed(sahte_disk_ref("disk4s2"), NULL, NULL);
+        BEKLE(macos_reddedildi("disk4s2"), "çıkarılan disk macOS'a bırakıldı");
+        BEKLE(sahte_ntfs3g_sayisi() == 0, "Finder'dan çıkarılan disk yeniden bağlandı");
+    }
+    BEKLE(sahte_waitpid_yabanci() == 0, "çocuk olmayan sürece waitpid çağrıldı");
+}
+
 int main(int argc, char **argv) {
     snprintf(g_klasor, sizeof g_klasor, "%s", argc > 1 ? argv[1] : ".");
     finder_cikarma();
@@ -161,6 +195,8 @@ int main(int argc, char **argv) {
     gecikmis_yedek_baglama();
     klon_diskler(0);
     klon_diskler(1);
+    onceki_servisin_ntfs3g(0);
+    onceki_servisin_ntfs3g(1);
     gunluk_goster();
     printf("\n%d/%d denetim geçti\n", g_toplam - g_hata, g_toplam);
     return g_hata ? 1 : 0;
