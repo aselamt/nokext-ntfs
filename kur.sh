@@ -19,7 +19,7 @@ root_gerek
 MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 [ "$MAJOR" -ge 26 ] || { echo "macOS 26 veya üstü gerekli (FSKit). Bu Mac: $(sw_vers -productVersion)"; exit 1; }
 xcode-select -p >/dev/null 2>&1 || { echo "Xcode Command Line Tools gerekli. Önce şunu çalıştırıp kurun: xcode-select --install"; exit 1; }
-bagliysa_dur
+bagliysa_dur   # erken uyarı (uzun adımlardan önce); asıl denetim 3. adımda servis durdurulduktan sonra
 
 echo "==> 1/3 macFUSE"
 /bin/sh "$HERE/scripts/macfuse-kur.sh"
@@ -32,6 +32,9 @@ else
   echo "==> 2/3 dist/ hazır ($(cat "$DIST/SURUM")); derleme atlandı"
 fi
 echo "==> 3/3 kurulum"
+# Eski servis durdurulur (macFUSE kurulumu / derleme sırasında takılan diski artık bağlayamaz), sonra
+# bağlı / bağlanmakta olan ntfs-3g yeniden denetlenir. Kurulum yarıda kalırsa eski servis geri açılır.
+bakim_baslat
 
 echo "==> dosyalar doğrulanıyor"
 (cd "$DIST" && shasum -a 256 -c SHA256SUMS >/dev/null) || { echo "dist/ içindeki dosyalar değişmiş; yeniden derleyin."; exit 1; }
@@ -52,14 +55,12 @@ fi
 "$D/bin/ntfs-3g" --version >/dev/null 2>&1 || { echo "ntfs-3g çalışmıyor; kurulum durdu"; exit 1; }
 C=$(readlink "$N/current" 2>/dev/null || true)
 if [ "$C" != "surumler/$VER" ]; then
-  [ -n "$C" ] && { ln -sfn "$C" "$N/onceki.yeni"; mv -fh "$N/onceki.yeni" "$N/onceki"; }
-  ln -sfn "surumler/$VER" "$N/current.yeni"; mv -fh "$N/current.yeni" "$N/current"
+  surum_degistir "surumler/$VER" "$C" || exit 1
 fi
 chown -h root:wheel "$N/current"; [ -L "$N/onceki" ] && chown -h root:wheel "$N/onceki"
 
 echo "==> servis, bildirim yardımcısı ve yönetim betikleri"
 U=$(konsol_uid)
-launchctl bootout system/local.ntfsotomatik 2>/dev/null || true
 launchctl bootout gui/$U/local.ntfsotomatik.bildirim 2>/dev/null || true
 for b in ntfsotomatikd ntfsotomatik-bildirim; do
   [ -f "$N/bin/$b" ] && ! cmp -s "$N/bin/$b" "$DIST/bin/$b" && cp -p "$N/bin/$b" "$N/bin/$b.onceki"
